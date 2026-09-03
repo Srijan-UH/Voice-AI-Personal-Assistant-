@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Plus Jakarta Sans', 'Outfit', system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #ffffff;
+  color: #0f172a;
+  overflow-x: hidden;
+  font-size: 1rem;
+  line-height: 1.6;
+  background-image: 
+    radial-gradient(at 10% 10%, rgba(99, 102, 241, 0.06) 0px, transparent 50%),
+    radial-gradient(at 90% 10%, rgba(168, 85, 247, 0.06) 0px, transparent 50%),
+    radial-gradient(at 50% 90%, rgba(244, 63, 94, 0.04) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  transition: all 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Typography Headings */
+h1, h2, h3, h4, .font-heading {
+  font-family: 'Outfit', sans-serif;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+/* Scaled Up Text Utility Overrides */
+.text-micro {
+  font-size: 0.75rem; /* 12px */
+  line-height: 1rem;
+}
+
+/* Glassmorphism Light Cards */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid #e2e8f0;
+}
+
+.glass-card {
+  background: #ffffff;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.06), 0 4px 12px -2px rgba(0, 0, 0, 0.03);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  border-color: #c7d2fe;
+  transform: translateY(-2px);
+  box-shadow: 0 20px 40px -15px rgba(99, 102, 241, 0.14);
+}
+
+.glass-input {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+
+.glass-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  outline: none;
+}
+
+/* Glow Accent Utility Classes */
+.glow-indigo {
+  box-shadow: 0 10px 30px -5px rgba(99, 102, 241, 0.18);
+}
+
+.glow-purple {
+  box-shadow: 0 10px 30px -5px rgba(168, 85, 247, 0.18);
+}
+
+.glow-rose {
+  box-shadow: 0 10px 30px -5px rgba(244, 63, 94, 0.18);
+}
+
+.glow-emerald {
+  box-shadow: 0 10px 30px -5px rgba(16, 185, 129, 0.18);
+}
+
+/* Dynamic Gradient Text */
+.gradient-text-indigo {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #d946ef 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-emerald {
+  background: linear-gradient(135deg, #059669 0%, #0d9488 50%, #0284c7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-rose {
+  background: linear-gradient(135deg, #e11d48 0%, #c026d3 50%, #9333ea 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Voice Soundwave Animation */
+@keyframes soundwave {
+  0%, 100% { height: 8px; }
+  50% { height: 32px; }
+}
+
+.animate-soundwave-1 { animation: soundwave 1.2s ease-in-out infinite; }
+.animate-soundwave-2 { animation: soundwave 1.2s ease-in-out 0.2s infinite; }
+.animate-soundwave-3 { animation: soundwave 1.2s ease-in-out 0.4s infinite; }
+.animate-soundwave-4 { animation: soundwave 1.2s ease-in-out 0.1s infinite; }
+.animate-soundwave-5 { animation: soundwave 1.2s ease-in-out 0.3s infinite; }
