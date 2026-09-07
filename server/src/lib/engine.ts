@@ -22,7 +22,7 @@ export function getAIClient(): {
   if (apiKey && apiKey.length > 5 && !apiKey.includes('your_openai_api_key') && !apiKey.includes('your_gemini_api_key')) {
     const isGoogleKey = !apiKey.startsWith('sk-');
     const baseURL = isGoogleKey ? 'https://generativelanguage.googleapis.com/v1beta/openai/' : undefined;
-    const defaultModel = process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash';
+    const defaultModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.6-flash';
     const modelName = isGoogleKey ? defaultModel : 'gpt-4o-mini';
 
     console.log(`[AI Engine] Using ${isGoogleKey ? 'Google Gemini' : 'OpenAI'} API Key with model "${modelName}"`);
@@ -103,10 +103,66 @@ export function detectLanguageFromText(text: string): 'hi-IN' | 'en-US' {
 }
 
 /**
+ * Construct dynamic initial opening text from database workflow definition
+ */
+export function buildDynamicOpeningMessage(workflow: Workflow): string {
+  const greeting = workflow.greetingMessage?.trim() || 'Hello! Thank you for calling.';
+
+  // Extract required fields configured in the database
+  const requiredFields = (workflow.fields || []).filter((f) => f.isRequired);
+
+  if (requiredFields.length === 0) {
+    return greeting;
+  }
+
+  // Format field labels nicely from DB field definitions
+  const labels = requiredFields.map((f) => {
+    let text = f.description || f.fieldName;
+    text = text
+      .toLowerCase()
+      .replace(/^ask for\s+/, '')
+      .replace(/^determine\s+/, '')
+      .replace(/for appointment confirmation$/, '')
+      .replace(/for order updates$/, '')
+      .replace(/for pickup or delivery$/, '')
+      .trim();
+    if (!text || text.length < 2) {
+      text = f.fieldName.replace(/_/g, ' ').toLowerCase();
+    }
+    return text;
+  });
+
+  const isHindi = workflow.language === 'hi-IN';
+
+  let fieldListStr = '';
+  if (labels.length === 1) {
+    fieldListStr = labels[0];
+  } else if (labels.length === 2) {
+    fieldListStr = `${labels[0]} and ${labels[1]}`;
+  } else {
+    const last = labels[labels.length - 1];
+    const rest = labels.slice(0, -1).join(', ');
+    fieldListStr = `${rest}, and ${last}`;
+  }
+
+  // Check if greeting already asks for the first field
+  if (greeting.toLowerCase().includes(labels[0].toLowerCase())) {
+    return greeting;
+  }
+
+  if (isHindi) {
+    return `${greeting} कृपया अपना ${fieldListStr} जानकारी प्रदान करें।`;
+  }
+
+  return `${greeting} To get started, could you please provide your ${fieldListStr}?`;
+}
+
+/**
  * Build dynamic system prompt from Firestore Workflow definition
  */
 function buildSystemPrompt(workflow: Workflow, businessName: string, activeLanguage: string = 'en-US'): string {
   const isHindi = activeLanguage === 'hi-IN' || workflow.language === 'hi-IN';
+  const openingText = buildDynamicOpeningMessage(workflow);
 
   const fieldRules = (workflow.fields || [])
     .map(
@@ -127,7 +183,7 @@ function buildSystemPrompt(workflow: Workflow, businessName: string, activeLangu
   const languageInstructions = isHindi
     ? `- Primary Language: HINDI / HINGLISH (hi-IN).
 - Respond in natural, conversational Hindi (or Hinglish in Devanagari/Roman script).
-- Greet with: "${workflow.greetingMessage}"
+- Greet with: "${openingText}"
 - Ask questions polite & clearly in Hindi.`
     : `- Primary Language: ENGLISH (en-US).
 - Conduct the conversation in polite, clear English.`;
@@ -138,7 +194,7 @@ Your primary goal is to guide the caller through the "${workflow.name}" workflow
 ${languageInstructions}
 
 STRICT INSTRUCTIONS:
-1. Greeting: Start by welcoming the caller with: "${workflow.greetingMessage}"
+1. Greeting: Start by welcoming the caller with the opening message: "${openingText}"
 2. Data Collection: You MUST collect information for the following fields during the conversation:
 ${fieldRules}
 
@@ -181,17 +237,17 @@ export async function getOrCreateSession(
       name: isHindi ? 'नमस्ते एपेक्स क्लिनिक असिस्टेंट' : isBakery ? 'Artisan Bakery Cake Assistant' : 'Dental & Healthcare Voice Assistant',
       triggerType: 'inbound_call',
       greetingMessage: isHindi
-        ? 'नमस्ते! एपेक्स क्लिनिक में आपका स्वागत है। मैं आपकी क्या सहायता कर सकता हूँ?'
-        : 'Hello! Thank you for calling. How can I assist you today?',
+        ? 'नमस्ते! एपेक्स क्लिनिक में आपका स्वागत है।'
+        : 'Hello! Thank you for calling.',
       closingMessage: isHindi
         ? 'आपका धन्यवाद! आपका अपॉइंटमेंट समय दर्ज कर लिया गया है।'
         : 'Thank you for calling us! Have a wonderful day.',
       isActive: true,
       language: isHindi ? 'hi-IN' : 'en-US',
       fields: [
-        { fieldName: 'caller_name', fieldType: 'text', isRequired: true, orderIndex: 1, description: 'Caller Name' },
-        { fieldName: 'phone_number', fieldType: 'phone', isRequired: true, orderIndex: 2, description: 'Contact Phone' },
-        { fieldName: 'preferred_date_time', fieldType: 'date', isRequired: true, orderIndex: 3, description: 'Preferred Date/Time' },
+        { fieldName: 'caller_name', fieldType: 'text', isRequired: true, orderIndex: 1, description: 'full name' },
+        { fieldName: 'phone_number', fieldType: 'phone', isRequired: true, orderIndex: 2, description: 'phone number' },
+        { fieldName: 'preferred_date_time', fieldType: 'date', isRequired: true, orderIndex: 3, description: 'preferred appointment date and time' },
       ],
       conditions: [{ fieldReference: 'caller_name', operator: 'is_set', value: '', resultingAction: 'schedule_appointment' }],
       createdAt: new Date().toISOString(),
@@ -216,16 +272,17 @@ export async function getOrCreateSession(
   const newSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const initialLang = workflow.language || 'en-US';
   const systemPrompt = buildSystemPrompt(workflow, businessName, initialLang);
+  const openingMessage = buildDynamicOpeningMessage(workflow);
 
   const initialMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'assistant', content: workflow.greetingMessage },
+    { role: 'assistant', content: openingMessage },
   ];
 
   const initialClientMessage: ChatMessage = {
     id: `msg_init_${Date.now()}`,
     role: 'assistant',
-    content: workflow.greetingMessage,
+    content: openingMessage,
     timestamp: new Date().toISOString(),
   };
 
@@ -261,7 +318,7 @@ function extractFieldsHeuristic(
     const name = field.fieldName.toLowerCase();
 
     if (name.includes('phone') || name.includes('contact') || field.fieldType === 'phone') {
-      const phoneMatch = userMessage.match(/(\+?\d{1,4}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+      const phoneMatch = userMessage.match(/(\+?\d{1,4}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\d{10}/);
       if (phoneMatch && !updated[field.fieldName]) {
         updated[field.fieldName] = phoneMatch[0];
       }
@@ -287,12 +344,19 @@ function extractFieldsHeuristic(
       const nameMatch = userMessage.match(/(?:my name is|i am|this is|call me)\s+([A-Za-z\s]+)/i);
       if (nameMatch) {
         updated[field.fieldName] = nameMatch[1].trim();
-      } else if (userMessage.split(' ').length <= 3 && !userMessage.match(/\d/)) {
+      } else if (userMessage.split(' ').length <= 3 && !userMessage.match(/\d/) && !lower.includes('hello') && !lower.includes('hi')) {
         updated[field.fieldName] = userMessage.trim();
       }
-    } else if (!updated[field.fieldName] && field.isRequired) {
-      if (userMessage.length > 2) {
-        updated[field.fieldName] = userMessage;
+    } else if (field.options && field.options.length > 0 && !updated[field.fieldName]) {
+      const matchedOpt = field.options.find((opt) => lower.includes(opt.toLowerCase()));
+      if (matchedOpt) {
+        updated[field.fieldName] = matchedOpt;
+      }
+    } else if ((name.includes('service') || name.includes('treatment') || name.includes('flavor')) && !updated[field.fieldName]) {
+      const serviceKeywords = ['checkup', 'cleaning', 'teeth cleaning', 'pain', 'emergency', 'orthodontics', 'vanilla', 'red velvet', 'chocolate'];
+      const found = serviceKeywords.find((kw) => lower.includes(kw));
+      if (found) {
+        updated[field.fieldName] = found;
       }
     }
   }
@@ -321,17 +385,17 @@ function localEngineTurn(
     lower.includes('am')
   ) {
     toolCallExecuted = 'check_calendar_availability';
-    reply = `I checked our availability calendar on Google Calendar and Tomorrow at 3:00 PM is open! Could you please provide your full name to confirm your appointment?`;
+    reply = `I checked our availability calendar on Google Calendar and Tomorrow at 10:00 AM is open!`;
   } else if (lower.includes('cake') || lower.includes('flavor') || lower.includes('bakery') || lower.includes('pickup')) {
     toolCallExecuted = 'check_inventory';
-    reply = `We have Vanilla, Red Velvet, and Chocolate cakes available for pickup! What flavor and date would you like to order?`;
+    reply = `We have Vanilla, Red Velvet, and Chocolate cakes available for pickup!`;
   } else if (lower.includes('order') || lower.includes('status') || lower.includes('tracking')) {
     toolCallExecuted = 'lookup_order_status';
     reply = `I checked your order status in our CRM! Your package is currently out for delivery and will arrive today by 5:00 PM.`;
   } else if (session.clientMessages.length <= 2) {
     reply = `Hello! Thank you for calling. I can help you book an appointment, take custom orders, or check order delivery status. How may I assist you?`;
   } else {
-    reply = `Thank you! I have recorded your intake information: "${userMessage}". Our team will follow up with you shortly. Have a great day!`;
+    reply = `Thank you! I have recorded your intake information.`;
   }
 
   return { reply, toolCallExecuted };
@@ -496,6 +560,39 @@ export async function processConversationTurn(
     toolCallExecuted = fallbackTurn.toolCallExecuted;
   }
 
+  // Check if required fields are satisfied or booking completed
+  const reqFields = (session.workflow.fields || []).filter((f) => f.isRequired);
+  const completedFieldsCount = reqFields.filter((f) => Boolean(session.extractedFields[f.fieldName])).length;
+  if (
+    (reqFields.length > 0 && completedFieldsCount >= reqFields.length) ||
+    toolCallExecuted === 'create_calendar_event'
+  ) {
+    session.isCompleted = true;
+  }
+
+  // If session completed, ensure assistant reply concludes with closingMessage and NO follow-up questions
+  if (session.isCompleted) {
+    const closing = session.workflow.closingMessage || 'Thank you for calling! Have a great day.';
+
+    // Remove any trailing question sentences
+    let cleanReply = replyText;
+    if (cleanReply.includes('?') || cleanReply.toLowerCase().includes('could you') || cleanReply.toLowerCase().includes('please tell me')) {
+      const sentences = cleanReply.split(/(?<=[.!?])\s+/);
+      const filtered = sentences.filter(
+        (s) => !s.includes('?') && !s.toLowerCase().includes('could you') && !s.toLowerCase().includes('please tell me') && !s.toLowerCase().includes('what service')
+      );
+      cleanReply = filtered.join(' ').trim();
+    }
+
+    if (!cleanReply || cleanReply.length < 5) {
+      replyText = closing;
+    } else if (!cleanReply.includes(closing)) {
+      replyText = `${cleanReply} ${closing}`;
+    } else {
+      replyText = cleanReply;
+    }
+  }
+
   // Push assistant response message
   const assistantMsgId = `msg_ast_${Date.now()}`;
   session.clientMessages.push({
@@ -505,13 +602,6 @@ export async function processConversationTurn(
     timestamp: new Date().toISOString(),
   });
   session.openAiMessages.push({ role: 'assistant', content: replyText });
-
-  // Check if required fields are satisfied
-  const reqFields = (session.workflow.fields || []).filter((f) => f.isRequired);
-  const completedFieldsCount = reqFields.filter((f) => Boolean(session.extractedFields[f.fieldName])).length;
-  if (reqFields.length > 0 && completedFieldsCount >= reqFields.length) {
-    session.isCompleted = true;
-  }
 
   // Save/update call document in Firestore
   let savedCallId = session.savedCallId;

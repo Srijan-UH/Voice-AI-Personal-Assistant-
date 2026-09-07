@@ -88,6 +88,7 @@ router.post(
         messages: turnResult.session.clientMessages,
         extractedFields: turnResult.session.extractedFields,
         isCompleted: turnResult.session.isCompleted,
+        closingMessage: turnResult.session.workflow.closingMessage,
         savedCallId: turnResult.savedCallId,
       });
     } catch (error: any) {

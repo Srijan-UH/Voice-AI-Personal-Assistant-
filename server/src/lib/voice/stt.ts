@@ -22,49 +22,61 @@ export async function transcribeAudioUniversal(
   const cleanMime = (mimeType || 'audio/webm').split(';')[0].trim();
   const base64Audio = audioBuffer.toString('base64');
 
-  // 1. Try Google Gemini Multimodal STT (gemini-1.5-flash / gemini-2.0-flash / gemini-flash-latest)
-  const geminiModels = [process.env.GEMINI_MODEL?.trim() || 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
-  for (const model of geminiModels) {
-    try {
-      console.log(`[STT] Trying Google Gemini (${model}) for ${audioBuffer.length} bytes audio (${cleanMime})...`);
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: 'Listen to this audio recording of a customer speaking to a business voice assistant. Transcribe their spoken words accurately into plain text. Output ONLY the exact transcribed text without quotes, formatting, or commentary.',
-                  },
-                  {
-                    inlineData: {
-                      mimeType: cleanMime === 'audio/webm' ? 'audio/webm' : cleanMime,
-                      data: base64Audio,
-                    },
-                  },
-                ],
-              },
-            ],
-          }),
-        }
-      );
+  // 1. Try Google Gemini Multimodal STT (gemini-3.6-flash)
+  const geminiModels = [process.env.GEMINI_MODEL?.trim() || 'gemini-3.6-flash', 'gemini-3.6-flash'];
 
-      if (geminiRes.ok) {
-        const gData = await geminiRes.json();
-        const gText = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (gText && gText.length > 0) {
-          console.log(`[STT] Gemini STT (${model}) Success: "${gText}"`);
-          return gText;
+  for (const model of geminiModels) {
+    let attemptsLeft = 2;
+    while (attemptsLeft > 0) {
+      try {
+        console.log(`[STT] Trying Google Gemini (${model}) for ${audioBuffer.length} bytes audio (${cleanMime})...`);
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: 'Listen to this audio recording of a customer speaking to a business voice assistant. Transcribe their spoken words accurately into plain text. Output ONLY the exact transcribed text without quotes, formatting, or commentary.',
+                    },
+                    {
+                      inlineData: {
+                        mimeType: cleanMime === 'audio/webm' ? 'audio/webm' : cleanMime,
+                        data: base64Audio,
+                      },
+                    },
+                  ],
+                },
+              ],
+            }),
+          }
+        );
+
+        if (geminiRes.ok) {
+          const gData = await geminiRes.json();
+          const gText = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (gText && gText.length > 0) {
+            console.log(`[STT] Gemini STT (${model}) Success: "${gText}"`);
+            return gText;
+          }
+        } else if (geminiRes.status === 429 && attemptsLeft > 1) {
+          console.warn(`[STT Warning] Gemini STT (${model}) HTTP 429 Rate Limited. Retrying after 2s pause...`);
+          await new Promise((resolve) => setTimeout(resolve, 2200));
+          attemptsLeft--;
+          continue;
+        } else {
+          const gErr = await geminiRes.text();
+          console.warn(`[STT Warning] Gemini STT (${model}) HTTP ${geminiRes.status}: ${gErr}`);
+          break;
         }
-      } else {
-        const gErr = await geminiRes.text();
-        console.warn(`[STT Warning] Gemini STT (${model}) HTTP ${geminiRes.status}: ${gErr}`);
+      } catch (err: any) {
+        console.warn(`[STT Exception] Gemini STT (${model}):`, err.message || err);
+        break;
       }
-    } catch (err: any) {
-      console.warn(`[STT Exception] Gemini STT (${model}):`, err.message || err);
+      attemptsLeft--;
     }
   }
 

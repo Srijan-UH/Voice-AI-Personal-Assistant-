@@ -21,13 +21,15 @@ router.post('/conversations/:workflowId/message', async (req: Request, res: Resp
     if (!message && !sessionId) {
       // Initialize brand new session
       const session = await getOrCreateSession(workflowId);
+      const openingMessage = session.clientMessages[0]?.content || session.workflow.greetingMessage;
       return res.status(200).json({
         success: true,
         sessionId: session.sessionId,
-        reply: session.workflow.greetingMessage,
+        reply: openingMessage,
         messages: session.clientMessages,
         extractedFields: session.extractedFields,
         isCompleted: session.isCompleted,
+        closingMessage: session.workflow.closingMessage,
       });
     }
 
@@ -45,6 +47,7 @@ router.post('/conversations/:workflowId/message', async (req: Request, res: Resp
       messages: result.session.clientMessages,
       extractedFields: result.session.extractedFields,
       isCompleted: result.session.isCompleted,
+      closingMessage: result.session.workflow.closingMessage,
       savedCallId: result.savedCallId,
     });
   } catch (error: any) {
@@ -136,14 +139,14 @@ router.post('/seed-demo', async (_req: Request, res: Response) => {
             fieldType: 'text',
             isRequired: true,
             orderIndex: 1,
-            description: 'Ask for caller full name',
+            description: 'full name',
           },
           {
             fieldName: 'caller_phone',
             fieldType: 'phone',
             isRequired: true,
             orderIndex: 2,
-            description: 'Ask for caller phone number for appointment confirmation',
+            description: 'phone number',
           },
           {
             fieldName: 'service_requested',
@@ -151,14 +154,14 @@ router.post('/seed-demo', async (_req: Request, res: Response) => {
             isRequired: true,
             orderIndex: 3,
             options: ['General Checkup', 'Teeth Cleaning', 'Emergency Pain', 'Orthodontics'],
-            description: 'Determine the dental service needed',
+            description: 'dental service needed',
           },
           {
             fieldName: 'appointment_date',
             fieldType: 'date',
             isRequired: true,
             orderIndex: 4,
-            description: 'Desired date and time for appointment',
+            description: 'preferred appointment date and time',
           },
         ],
         conditions: [

@@ -26,6 +26,7 @@ export interface ChatTurnResponse {
   messages: ChatMessageItem[];
   extractedFields: Record<string, any>;
   isCompleted: boolean;
+  closingMessage?: string;
   savedCallId?: string;
 }
 

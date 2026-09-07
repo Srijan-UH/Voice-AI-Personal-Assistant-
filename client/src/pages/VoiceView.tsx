@@ -16,6 +16,10 @@ import {
   ChevronUp,
   Radio,
   Send,
+  PauseCircle,
+  Play,
+  RotateCcw,
+  Zap,
 } from 'lucide-react';
 import { ChatMessageItem, sendChatMessage, sendVoiceMessage } from '../lib/api';
 
@@ -27,14 +31,17 @@ export const VoiceView: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [extractedFields, setExtractedFields] = useState<Record<string, any>>({});
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
+  const [closingMessage, setClosingMessage] = useState<string>('');
   const [savedCallId, setSavedCallId] = useState<string | undefined>(undefined);
   const [textInput, setTextInput] = useState<string>('');
 
-  // Recording & Voice States
+  // Continuous Session & Voice States
+  const [isContinuousMode, setIsContinuousMode] = useState<boolean>(true);
+  const [isSessionActive, setIsSessionActive] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
-  const [statusText, setStatusText] = useState<string>('Tap Mic to Speak');
+  const [statusText, setStatusText] = useState<string>('Tap Mic to Start Conversation');
   const [liveTranscript, setLiveTranscript] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showDrawer, setShowDrawer] = useState<boolean>(false);
@@ -49,9 +56,44 @@ export const VoiceView: React.FC = () => {
   const animFrameRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  // Sync state refs to prevent stale closure issues in async audio/speech callbacks
+  const isContinuousModeRef = useRef<boolean>(true);
+  const isSessionActiveRef = useRef<boolean>(false);
+  const isCompletedRef = useRef<boolean>(false);
+  const isProcessingRef = useRef<boolean>(false);
+
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoListenDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    isContinuousModeRef.current = isContinuousMode;
+  }, [isContinuousMode]);
+
+  useEffect(() => {
+    isSessionActiveRef.current = isSessionActive;
+  }, [isSessionActive]);
+
+  useEffect(() => {
+    isCompletedRef.current = isCompleted;
+  }, [isCompleted]);
+
+  useEffect(() => {
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  // Clean up audio context & timers on unmount
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
+      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
+    };
+  }, []);
 
   // Initialize session on mount
   useEffect(() => {
@@ -65,8 +107,11 @@ export const VoiceView: React.FC = () => {
         setSessionId(res.sessionId);
         setMessages(res.messages || []);
         setExtractedFields(res.extractedFields || {});
-        setIsCompleted(res.isCompleted || false);
-        setStatusText('Tap Mic to Speak');
+        const completed = res.isCompleted || false;
+        setIsCompleted(completed);
+        isCompletedRef.current = completed;
+        if (res.closingMessage) setClosingMessage(res.closingMessage);
+        setStatusText(completed ? 'Call Session Completed' : 'Tap Mic to Start Conversation');
 
         if (res.reply) {
           speakBrowserTTS(res.reply);
@@ -87,30 +132,52 @@ export const VoiceView: React.FC = () => {
     scrollToBottom();
   }, [messages, isProcessing]);
 
-  // Clean up audio context on unmount
-  useEffect(() => {
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
-    };
-  }, []);
+  // Auto-listening trigger function called after TTS completes
+  const triggerAutoListen = () => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
 
-  // Start microphone recording & volume meter
+    if (isCompletedRef.current) {
+      setIsSessionActive(false);
+      isSessionActiveRef.current = false;
+      setStatusText('Call Session Completed');
+      return;
+    }
+
+    if (isContinuousModeRef.current && isSessionActiveRef.current) {
+      setStatusText('Preparing mic for next turn...');
+      autoListenDelayRef.current = setTimeout(() => {
+        startRecording();
+      }, 500);
+    } else {
+      setStatusText('Tap Mic to Speak');
+    }
+  };
+
+  // Start microphone recording & audio visualizer
   const startRecording = async () => {
-    if (isProcessing || isCompleted) return;
+    if (isProcessingRef.current || isCompletedRef.current) return;
     setErrorMsg(null);
     audioChunksRef.current = [];
     capturedTextRef.current = '';
     setLiveTranscript('');
     setMicVolume(0);
+    setIsSessionActive(true);
+    isSessionActiveRef.current = true;
+
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
 
     // Cancel active TTS playback
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+    }
 
     try {
-      // 1. Get user microphone stream first
+      // 1. Get user microphone stream
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       // 2. Setup Audio Visualizer Analyser Node
@@ -157,6 +224,15 @@ export const VoiceView: React.FC = () => {
             if (cleanText) {
               setLiveTranscript(cleanText);
               capturedTextRef.current = cleanText;
+
+              // Continuous mode auto-silence timer (1.6s of silence auto-submits turn)
+              if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+              if (isContinuousModeRef.current) {
+                silenceTimerRef.current = setTimeout(() => {
+                  console.log('[Continuous Mode] Silence detected, auto-submitting turn...');
+                  stopRecording();
+                }, 1600);
+              }
             }
           };
 
@@ -170,7 +246,7 @@ export const VoiceView: React.FC = () => {
         }
       }
 
-      // 4. Setup MediaRecorder with supported MIME type & 250ms timeslice
+      // 4. Setup MediaRecorder
       let options: MediaRecorderOptions = {};
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         options = { mimeType: 'audio/webm;codecs=opus' };
@@ -201,18 +277,21 @@ export const VoiceView: React.FC = () => {
         await handleProcessVoiceInput(audioBlob, capturedTextRef.current);
       };
 
-      mediaRecorder.start(250); // timeslice 250ms
+      mediaRecorder.start(250);
       setIsRecording(true);
-      setStatusText('Listening... Speak now!');
+      setStatusText(isContinuousModeRef.current ? 'Continuous Session Active — Listening...' : 'Listening... Speak now!');
     } catch (err: any) {
       console.error('Microphone recording error:', err);
       setErrorMsg('Microphone access denied. Please click "Allow" on browser microphone prompt.');
       setStatusText('Microphone Access Blocked');
+      setIsSessionActive(false);
+      isSessionActiveRef.current = false;
     }
   };
 
   // Stop recording
   const stopRecording = () => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -221,8 +300,21 @@ export const VoiceView: React.FC = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-      setStatusText('Processing...');
+      setStatusText('Processing turn...');
     }
+  };
+
+  // Pause / End Continuous Session
+  const pauseContinuousSession = () => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
+    setIsSessionActive(false);
+    isSessionActiveRef.current = false;
+    stopRecording();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (currentAudioRef.current) currentAudioRef.current.pause();
+    setIsPlayingAudio(false);
+    setStatusText('Session Paused — Tap Mic to Resume');
   };
 
   // Process Voice Input (Text or Blob)
@@ -232,22 +324,20 @@ export const VoiceView: React.FC = () => {
     setIsProcessing(true);
     setStatusText('Processing AI response...');
 
-    const inaudibleMsg = 'Sorry for the inconvenience. We could not hear your audio clearly. You can tap the mic to retry or continue in chat below.';
+    const inaudibleMsg = 'Sorry for the inconvenience. We could not hear your audio clearly. Please try speaking again.';
 
     try {
       let res;
-      // 1. If Web Speech API captured text locally, send chat message directly
       if (recognizedText && recognizedText.trim().length > 0) {
         res = await sendChatMessage(workflowId, recognizedText.trim(), sessionId);
       } else if (audioBlob && audioBlob.size > 200) {
-        // 2. Fallback: send recorded audio blob to server STT endpoint
         try {
           res = await sendVoiceMessage(workflowId, audioBlob, sessionId);
         } catch (sttErr: any) {
           console.warn('Voice Blob STT failed:', sttErr.message);
           setErrorMsg(inaudibleMsg);
           speakBrowserTTS(inaudibleMsg);
-          setStatusText('Tap Mic to Retry or Use Chat');
+          setStatusText('Use Chat or Tap Mic to Retry');
           setIsProcessing(false);
           return;
         }
@@ -255,7 +345,7 @@ export const VoiceView: React.FC = () => {
         // No speech detected
         setErrorMsg(inaudibleMsg);
         speakBrowserTTS(inaudibleMsg);
-        setStatusText('Tap Mic to Retry or Use Chat');
+        setStatusText('Use Chat or Tap Mic to Retry');
         setIsProcessing(false);
         return;
       }
@@ -263,8 +353,19 @@ export const VoiceView: React.FC = () => {
       setSessionId(res.sessionId);
       setMessages(res.messages || []);
       setExtractedFields(res.extractedFields || {});
-      setIsCompleted(res.isCompleted || false);
+      const completed = res.isCompleted || false;
+      setIsCompleted(completed);
+      isCompletedRef.current = completed;
+      if (res.closingMessage) setClosingMessage(res.closingMessage);
       if (res.savedCallId) setSavedCallId(res.savedCallId);
+
+      if (completed) {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
+        setStatusText('Call Session Completed');
+      }
 
       setLiveTranscript('');
 
@@ -274,13 +375,13 @@ export const VoiceView: React.FC = () => {
       } else if (res.reply) {
         speakBrowserTTS(res.reply);
       } else {
-        setStatusText(res.isCompleted ? 'Call Completed' : 'Tap Mic to Speak');
+        triggerAutoListen();
       }
     } catch (err: any) {
       console.error('Error processing voice message:', err);
       setErrorMsg(inaudibleMsg);
       speakBrowserTTS(inaudibleMsg);
-      setStatusText('Tap Mic to Retry or Use Chat');
+      setStatusText('Use Chat or Tap Mic to Retry');
     } finally {
       setIsProcessing(false);
     }
@@ -297,22 +398,32 @@ export const VoiceView: React.FC = () => {
     setStatusText('Processing...');
     setErrorMsg(null);
 
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (currentAudioRef.current) currentAudioRef.current.pause();
 
     try {
       const res = await sendChatMessage(workflowId, msg, sessionId);
       setSessionId(res.sessionId);
       setMessages(res.messages || []);
       setExtractedFields(res.extractedFields || {});
-      setIsCompleted(res.isCompleted || false);
+      const completed = res.isCompleted || false;
+      setIsCompleted(completed);
+      isCompletedRef.current = completed;
+      if (res.closingMessage) setClosingMessage(res.closingMessage);
       if (res.savedCallId) setSavedCallId(res.savedCallId);
+
+      if (completed) {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        if (autoListenDelayRef.current) clearTimeout(autoListenDelayRef.current);
+        setStatusText('Call Session Completed');
+      }
 
       if (res.reply) {
         speakBrowserTTS(res.reply);
       } else {
-        setStatusText(res.isCompleted ? 'Call Completed' : 'Tap Mic to Speak');
+        triggerAutoListen();
       }
     } catch (err: any) {
       console.error('Error sending text:', err);
@@ -333,26 +444,27 @@ export const VoiceView: React.FC = () => {
       const audio = new Audio(audioBase64);
       currentAudioRef.current = audio;
       setIsPlayingAudio(true);
-      setStatusText('Speaking...');
+      setStatusText('AI Assistant Speaking...');
 
       audio.onended = () => {
         setIsPlayingAudio(false);
-        setStatusText(isCompleted ? 'Call Completed' : 'Tap Mic to Speak');
+        triggerAutoListen();
       };
 
       audio.onerror = () => {
         setIsPlayingAudio(false);
-        setStatusText('Tap Mic to Speak');
+        triggerAutoListen();
       };
 
       audio.play().catch((err) => {
         console.warn('Audio autoplay prevented:', err);
         setIsPlayingAudio(false);
-        setStatusText('Tap Mic to Speak');
+        triggerAutoListen();
       });
     } catch (err) {
       console.error('Audio playback exception:', err);
       setIsPlayingAudio(false);
+      triggerAutoListen();
     }
   };
 
@@ -367,21 +479,24 @@ export const VoiceView: React.FC = () => {
 
         utterance.onstart = () => {
           setIsPlayingAudio(true);
-          setStatusText('Speaking...');
+          setStatusText('AI Assistant Speaking...');
         };
         utterance.onend = () => {
           setIsPlayingAudio(false);
-          setStatusText(isCompleted ? 'Call Completed' : 'Tap Mic to Speak');
+          triggerAutoListen();
         };
         utterance.onerror = () => {
           setIsPlayingAudio(false);
-          setStatusText(isCompleted ? 'Call Completed' : 'Tap Mic to Speak');
+          triggerAutoListen();
         };
         window.speechSynthesis.speak(utterance);
+      } else {
+        triggerAutoListen();
       }
     } catch (err) {
       console.warn('Browser speech synthesis error:', err);
       setIsPlayingAudio(false);
+      triggerAutoListen();
     }
   };
 
@@ -391,7 +506,10 @@ export const VoiceView: React.FC = () => {
       <div className="bg-white border border-slate-200 rounded-2xl p-3 mb-3 flex items-center justify-between shadow-md">
         <div className="flex items-center space-x-2.5">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => {
+              pauseContinuousSession();
+              navigate('/');
+            }}
             className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -402,19 +520,43 @@ export const VoiceView: React.FC = () => {
               Voice AI Assistant
             </h2>
             <p className="text-xs text-slate-500 font-medium">
-              Real-Time Voice Intake & Booking
+              Real-Time Hands-Free Voice Testing
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() => setShowDrawer(!showDrawer)}
-          className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1.5 border border-slate-200"
-        >
-          <ListChecks className="w-4 h-4 text-indigo-600" />
-          Extracted ({Object.keys(extractedFields).length})
-          {showDrawer ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Continuous Mode Toggle */}
+          <button
+            onClick={() => {
+              const nextVal = !isContinuousMode;
+              setIsContinuousMode(nextVal);
+              isContinuousModeRef.current = nextVal;
+              if (!nextVal && isRecording) {
+                // If user disables continuous mode while recording, let current turn finish normally
+              }
+            }}
+            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
+              isContinuousMode
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                : 'bg-slate-100 text-slate-600 border-slate-300'
+            }`}
+            title="Toggle Continuous Hands-Free Voice Session"
+          >
+            <Zap className={`w-3.5 h-3.5 ${isContinuousMode ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} />
+            <span>{isContinuousMode ? 'Hands-Free ON' : 'Manual Mode'}</span>
+          </button>
+
+          {/* Drawer Toggle */}
+          <button
+            onClick={() => setShowDrawer(!showDrawer)}
+            className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 border border-slate-200"
+          >
+            <ListChecks className="w-4 h-4 text-indigo-600" />
+            <span>({Object.keys(extractedFields).length})</span>
+            {showDrawer ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
       </div>
 
       {/* Extracted Fields Drawer */}
@@ -445,7 +587,7 @@ export const VoiceView: React.FC = () => {
         </div>
       )}
 
-      {/* Polite Error / Inaudible Alert Banner */}
+      {/* Error / Alert Banner */}
       {errorMsg && (
         <div className="p-3.5 mb-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between shadow-sm animate-fade-in">
           <div className="flex items-start space-x-2">
@@ -464,22 +606,31 @@ export const VoiceView: React.FC = () => {
           <div className="flex items-center justify-between">
             <span className="font-bold text-indigo-700 flex items-center gap-1.5">
               <Mic className="w-4 h-4 text-rose-600 animate-pulse" />
-              Microphone Active — Listening
+              Listening — Turn Active
             </span>
-            {/* Audio Wave Volume Visualizer Bars */}
-            <div className="flex items-end gap-1 h-4">
-              <div
-                className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
-                style={{ height: `${Math.max(20, micVolume * 0.8)}%` }}
-              ></div>
-              <div
-                className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
-                style={{ height: `${Math.max(30, micVolume * 1.2)}%` }}
-              ></div>
-              <div
-                className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
-                style={{ height: `${Math.max(15, micVolume * 0.6)}%` }}
-              ></div>
+            <div className="flex items-center gap-2">
+              {/* Finish speaking manual trigger button */}
+              <button
+                onClick={stopRecording}
+                className="px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold transition-colors"
+              >
+                Send Turn Now
+              </button>
+              {/* Audio Wave Visualizer Bars */}
+              <div className="flex items-end gap-1 h-4">
+                <div
+                  className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(20, micVolume * 0.8)}%` }}
+                ></div>
+                <div
+                  className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(30, micVolume * 1.2)}%` }}
+                ></div>
+                <div
+                  className="w-1 bg-indigo-600 rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(15, micVolume * 0.6)}%` }}
+                ></div>
+              </div>
             </div>
           </div>
 
@@ -489,7 +640,7 @@ export const VoiceView: React.FC = () => {
             </p>
           ) : (
             <p className="text-[11px] text-indigo-500 italic">
-              Say your request aloud into your microphone...
+              Speak turn-by-turn into your microphone (auto-submits when you pause)...
             </p>
           )}
         </div>
@@ -549,20 +700,22 @@ export const VoiceView: React.FC = () => {
 
       {/* Completion Banner */}
       {isCompleted && (
-        <div className="p-4 mb-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between shadow-md">
+        <div className="p-4 mb-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between shadow-md animate-fade-in">
           <div className="flex items-center space-x-2.5">
             <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-900">
                 Call Intake Completed
               </h4>
-              <p className="text-xs text-emerald-700">All required fields collected & logged in Firestore.</p>
+              <p className="text-xs text-emerald-700 font-medium leading-relaxed">
+                {closingMessage || 'Thank you for calling! Your intake is complete and saved to Firestore.'}
+              </p>
             </div>
           </div>
           {savedCallId && (
             <button
-              onClick={() => navigate('/calls')}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm"
+              onClick={() => navigate('/dashboard')}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm shrink-0 ml-2"
             >
               View Call Log
             </button>
@@ -572,17 +725,22 @@ export const VoiceView: React.FC = () => {
 
       {/* Main Microphone Action Controls */}
       <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-xl space-y-3">
-        {/* Status Pill */}
+        {/* Status Banner */}
         <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700">
-          {isProcessing ? (
+          {isCompleted ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span className="text-emerald-700 font-extrabold">Call Session Completed</span>
+            </>
+          ) : isProcessing ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-              <span>Processing...</span>
+              <span className="text-indigo-600">Processing turn...</span>
             </>
           ) : isPlayingAudio ? (
             <>
               <Volume2 className="w-4 h-4 text-emerald-600 animate-pulse" />
-              <span className="text-emerald-700">Speaking...</span>
+              <span className="text-emerald-700">AI Assistant Speaking...</span>
             </>
           ) : isRecording ? (
             <>
@@ -597,29 +755,55 @@ export const VoiceView: React.FC = () => {
           )}
         </div>
 
-        {/* Big Pulsing Mic Button with Dynamic Volume Ring */}
-        <div className="flex justify-center pt-1">
-          {isRecording ? (
+        {/* Big Pulsing Mic / Pause Session / Completed Action Button */}
+        <div className="flex items-center justify-center gap-4 pt-1">
+          {isCompleted ? (
             <button
-              onClick={stopRecording}
-              style={{
-                boxShadow: `0 0 ${15 + micVolume * 0.4}px rgba(225, 29, 72, ${0.4 + micVolume * 0.006})`,
-                transform: `scale(${1 + micVolume * 0.002})`,
-              }}
-              className="w-20 h-20 rounded-full bg-gradient-to-tr from-rose-600 to-red-500 text-white flex items-center justify-center shadow-xl transition-all"
+              onClick={() => navigate('/dashboard')}
+              className="px-6 py-3.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-lg transition-all flex items-center gap-2"
             >
-              <Square className="w-8 h-8" />
+              <CheckCircle2 className="w-4.5 h-4.5 text-white" />
+              <span>Call Intake Completed — View Call Log</span>
             </button>
+          ) : isSessionActive && isRecording ? (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={stopRecording}
+                style={{
+                  boxShadow: `0 0 ${15 + micVolume * 0.4}px rgba(225, 29, 72, ${0.4 + micVolume * 0.006})`,
+                  transform: `scale(${1 + micVolume * 0.002})`,
+                }}
+                className="w-20 h-20 rounded-full bg-gradient-to-tr from-rose-600 to-red-500 text-white flex items-center justify-center shadow-xl transition-all hover:scale-105"
+                title="Send current turn immediately"
+              >
+                <Square className="w-8 h-8" />
+              </button>
+
+              <button
+                onClick={pauseContinuousSession}
+                className="p-3.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors shadow-sm"
+                title="Pause Continuous Session"
+              >
+                <PauseCircle className="w-6 h-6" />
+              </button>
+            </div>
           ) : (
             <button
               onClick={startRecording}
               disabled={isProcessing || isCompleted}
-              className="w-20 h-20 rounded-full bg-gradient-to-tr from-indigo-600 via-purple-600 to-rose-600 hover:scale-105 text-white flex items-center justify-center shadow-xl glow-indigo transition-all active:scale-95 disabled:opacity-40"
+              className="px-6 py-4 rounded-full bg-gradient-to-tr from-indigo-600 via-purple-600 to-rose-600 hover:scale-105 text-white font-extrabold text-sm flex items-center gap-3 shadow-xl glow-indigo transition-all active:scale-95 disabled:opacity-40"
             >
-              <Mic className="w-9 h-9" />
+              <Mic className="w-7 h-7 animate-pulse" />
+              <span>{messages.length > 0 ? 'Start Continuous Turn-Taking' : 'Start Voice Session'}</span>
             </button>
           )}
         </div>
+
+        <p className="text-[11px] text-center text-slate-400 font-medium pt-1">
+          {isContinuousMode
+            ? '⚡ Hands-free continuous mode active: once started, mic auto-opens after each AI response.'
+            : '👆 Manual mode active: click mic button for each turn.'}
+        </p>
 
         {/* Text Input Fallback */}
         <form onSubmit={handleSendText} className="flex gap-2 pt-2 border-t border-slate-100">
@@ -628,7 +812,7 @@ export const VoiceView: React.FC = () => {
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
             disabled={isProcessing || isCompleted}
-            placeholder="Type a message or response..."
+            placeholder="Or type a text message..."
             className="flex-1 glass-input px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium disabled:opacity-50"
           />
           <button
@@ -643,3 +827,4 @@ export const VoiceView: React.FC = () => {
     </div>
   );
 };
+
