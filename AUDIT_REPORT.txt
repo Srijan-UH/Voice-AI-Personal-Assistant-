@@ -1,0 +1,601 @@
+================================================================================
+VOICE AI ASSISTANT — COMPLETE SYSTEM AUDIT REPORT
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+
+1.1 Directory Structure (2 Levels Deep)
+
+client/src/
+├── App.tsx                    # Top-level React router & page layouts
+├── components/
+│   └── Header.tsx             # Navigation bar & global clinic branding
+├── index.css                  # Global Tailwind CSS & custom design tokens
+├── lib/
+│   ├── api.ts                 # HTTP client for backend endpoints (/voice, /message, etc.)
+│   ├── speechNormalizer.js    # Compiled JS normalizer utility
+│   └── speechNormalizer.ts    # TTS text normalizer (digit spacing, time/date, symbol strip)
+├── main.tsx                   # React root entry point
+├── pages/
+│   ├── ChatView.tsx           # Text-based chat intake interface
+│   ├── Dashboard.tsx          # Intake leads, appointment logs & audio playback view
+│   ├── Home.tsx               # Clinic landing page & workflow selector
+│   ├── VoiceView.tsx          # Real-time hands-free voice assistant UI & Dev Voice Lab
+│   └── WorkflowBuilder.tsx    # Workflow editor & clinic hours configuration
+├── types/
+│   └── db.ts                  # Shared client TypeScript interfaces (Workflow, Call, etc.)
+└── vite-env.d.ts              # Vite environment typings
+
+server/src/
+├── index.ts                   # Express server entry point, CORS, routes & warmup
+├── lib/
+│   ├── engine.ts              # Intake state machine, slot progression & appointment booking
+│   ├── firebase.ts            # Firebase Admin SDK initialization & Firestore references
+│   ├── providerInfo.ts        # Provider telemetry, timing logger & env status audit
+│   ├── sarvam.ts              # Sarvam AI HTTP client (LLM chat, Saaras STT, Bulbul TTS)
+│   ├── speechNormalizer.ts    # Server-side TTS text normalizer
+│   ├── tools/                 # Tool schemas & integrations (Google Calendar, CRM)
+│   ├── validators.ts          # Slot validators (name, 10-digit Indian phone, date, time)
+│   └── voice/                 # Speech layer (stt.ts, tts.ts, in-memory ttsCache.ts)
+├── routes/
+│   ├── businesses.ts          # Business CRUD endpoints
+│   ├── calls.ts               # Call intake records & lead retrieval
+│   ├── conversations.ts       # Text turn endpoint (/api/conversations/:workflowId/message)
+│   ├── health.ts              # System health & provider status endpoint (/api/health)
+│   ├── test-db.ts             # Firestore connection verification endpoint
+│   ├── voice.ts               # Audio turn endpoint (/api/conversations/:workflowId/voice)
+│   └── workflows.ts           # Workflow definitions & demo seeding endpoints
+├── scripts/
+│   ├── test-apis.ts           # Diagnostic test for Sarvam LLM, STT, and TTS pipeline
+│   ├── test-db.ts             # Standalone Firestore connection test script
+│   └── test-normalizer.ts     # Unit tests for pronunciation & clause chunking
+└── types/
+    └── db.ts                  # Backend domain data contracts
+
+Files Involved in the Voice Flow:
+- client/src/pages/VoiceView.tsx: Captures microphone audio (MediaRecorder), displays live transcript (SpeechRecognition), controls hands-free VAD loop, manages barge-in, and renders Dev Voice Lab.
+- client/src/lib/speechNormalizer.ts: Formats 10-digit phone numbers with pauses, expands times/dates, removes symbols/emojis, and chunks utterances (<180 chars).
+- client/src/lib/api.ts: Sends multipart/form-data audio blob to the backend /voice endpoint.
+- server/src/routes/voice.ts: Orchestrates voice turns: receives audio, invokes STT, passes text to engine, retrieves/synthesizes TTS, and logs latency.
+- server/src/lib/voice/stt.ts: Calls Sarvam saaras:v3 for speech-to-text audio transcription.
+- server/src/lib/voice/tts.ts: Calls Sarvam bulbul:v3 for text-to-speech audio synthesis.
+- server/src/lib/voice/ttsCache.ts: In-memory cache pre-warmed on boot for fixed clinic questions/acknowledgements.
+- server/src/lib/engine.ts: Deterministic intake state machine managing slots (caller_name, phone_number, appt_date, appt_time) and read-back confirmation.
+- server/src/lib/validators.ts: Validates extracted slot values against clinic rules and operating hours.
+- server/src/lib/sarvam.ts: Centralized Sarvam client with exponential backoff and timeout handling.
+
+
+1.2 Dependencies & Framework Versions
+
+Client (client/package.json):
+- react: ^18.3.1
+- react-dom: ^18.3.1
+- react-router-dom: ^7.18.3
+- vite: ^5.3.1
+- typescript: ^5.4.5
+- @vitejs/plugin-react: ^4.3.1
+- tailwindcss: ^3.4.4
+- postcss: ^8.4.38
+- autoprefixer: ^10.4.19
+- lucide-react: ^0.395.0
+
+Server (server/package.json):
+- express: ^4.19.2
+- typescript: ^5.5.2
+- tsx: ^4.16.2
+- @types/node: ^20.14.9
+- @types/express: ^4.17.21
+- openai: ^7.8.0 (client SDK pointed to Sarvam endpoint)
+- @deepgram/sdk: ^5.9.0 (installed dependency; unused in code)
+- googleapis: ^178.0.0
+- firebase-admin: ^14.3.0
+- multer: ^2.3.0
+- cors: ^2.8.5
+- dotenv: ^16.4.5
+
+
+1.3 Environment Variables Status
+
+Client:
+- VITE_API_BASE_URL: Present in .env (SET) | Present in .env.example: Yes
+
+Server:
+- PORT: Present in .env (SET) | Present in .env.example: Yes
+- CLIENT_ORIGIN: Present in .env (SET) | Present in .env.example: Yes
+- SARVAM_API_KEY: Present in .env (SET) | Present in .env.example: Yes
+- SARVAM_MODEL: Present in .env (SET) | Present in .env.example: Yes
+- SARVAM_STT_MODEL: Present in .env (SET) | Present in .env.example: Yes
+- SARVAM_TTS_MODEL: Present in .env (SET) | Present in .env.example: Yes
+- SARVAM_TTS_VOICE: Present in .env (SET) | Present in .env.example: Yes
+- CLINIC_OPEN_HOUR: Present in .env (SET, default 9) | Present in .env.example: Yes
+- CLINIC_CLOSE_HOUR: Present in .env (SET, default 19) | Present in .env.example: Yes
+- FIREBASE_PROJECT_ID: Present in .env (SET) | Present in .env.example: Yes
+- FIREBASE_CLIENT_EMAIL: Present in .env (SET) | Present in .env.example: Yes
+- FIREBASE_PRIVATE_KEY: Present in .env (SET) | Present in .env.example: Yes
+- GOOGLE_CLIENT_ID: Present in .env (NOT SET / PLACEHOLDER) | Present in .env.example: Yes
+- GOOGLE_CLIENT_SECRET: Present in .env (NOT SET / PLACEHOLDER) | Present in .env.example: Yes
+- GOOGLE_REDIRECT_URI: Present in .env (SET) | Present in .env.example: Yes
+
+Variables used in code but missing from server/.env.example:
+- SARVAM_CHAT_MODEL: (fallback used in server/src/lib/sarvam.ts:132)
+- DEBUG_PROVIDERS: (used in server/src/routes/health.ts:14)
+- STT_PROVIDER: (used in server/src/routes/health.ts:21)
+- TTS_PROVIDER: (used in server/src/routes/health.ts:22)
+
+
+================================================================================
+2. AI AND PROVIDER USAGE
+================================================================================
+
+2.1 Keyword Audit Across Client and Server (excluding node_modules / lockfiles)
+- "gemini": 0 hits (Completely removed).
+- "google generative": 0 hits (Completely removed).
+- "openai": 17 hits. In engine.ts, OpenAI SDK is instantiated pointing to baseURL: 'https://api.sarvam.ai/v1' with apiKey: sarvamKey to communicate with Sarvam. In stt.ts and tts.ts, synthesizeSpeechWithOpenAI and transcribeAudioWithOpenAI are legacy function aliases pointing directly to synthesizeSpeechUniversal and transcribeAudioUniversal (Sarvam).
+- "sarvam": 110+ hits. Primary provider for LLM value extraction (sarvamChat / sarvam-105b-conversations), STT (saaras:v3), and TTS (bulbul:v3).
+- "deepgram": 1 hit in server/src/lib/voice/stt.ts:63 (legacy alias transcribeAudioWithDeepgram = transcribeAudioUniversal). Deepgram SDK is an unused dependency in package.json.
+- "soniox": 0 hits.
+
+2.2 LLM Model Configuration
+- Model name: "sarvam-105b-conversations" (read from process.env.SARVAM_MODEL).
+- Function making call: extractSlotValueWithLLM() in server/src/lib/engine.ts:199-232 calling sarvamChat() in server/src/lib/sarvam.ts:126.
+- The conversation flow is governed by a deterministic state machine; the LLM is only called to parse ambiguous slot utterances into structured text.
+
+2.3 VOICE_MODE Audit
+- Does VOICE_MODE exist? NO. Neither VOICE_MODE nor any environment variable with this name exists in client or server.
+- Current behavior: Server always attempts Sarvam TTS via ttsCache or live synthesizeSpeechUniversal(). Client plays returned audioBase64 if present, falling back to browser speechSynthesis if audioBase64 is null.
+
+2.4 Active STT and TTS Components
+- STT (Live UI Feedback): Browser Web Speech API (SpeechRecognition) in client/src/pages/VoiceView.tsx:559-599.
+- STT (Turn Processing): Sarvam AI (saaras:v3) in server/src/lib/voice/stt.ts:16-36 and server/src/lib/sarvam.ts:178-228.
+- TTS (Server-side): Sarvam AI (bulbul:v3, voice: ritu) in server/src/lib/voice/tts.ts:16-34 and server/src/lib/voice/ttsCache.ts:46-77.
+- TTS (Client-side / Fallback): Browser speechSynthesis in client/src/pages/VoiceView.tsx:834-960.
+
+
+================================================================================
+3. CONVERSATION ENGINE
+================================================================================
+
+3.1 Slots, Order, Validators & State Storage
+
+Slot 1: caller_name (State: collecting_name) -> validateName() -> Max re-asks: 3
+Slot 2: phone_number (State: collecting_phone) -> validatePhone() -> Max re-asks: 3
+Slot 3: appt_date (State: collecting_date) -> validateDate() -> Max re-asks: 3
+Slot 4: appt_time (State: collecting_time) -> validateTime() -> Max re-asks: 3
+Confirmation: awaiting_confirmation -> isConfirmationYes() / isConfirmationNo()
+
+State storage:
+- In-memory: sessions = new Map<string, ConversationSession>() in server/src/lib/engine.ts:104.
+- Firestore: call log persisted asynchronously to 'calls' collection after each turn in server/src/lib/engine.ts:536-570.
+
+3.2 Code Excerpts
+
+--- Name Validation (server/src/lib/validators.ts:29-50) ---
+export function validateName(raw: string): ValidationResult {
+  const cleaned = raw.trim().replace(/[^a-zA-Z\s'\-]/g, '').trim();
+  if (cleaned.length < 2) return { valid: false };
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 4) return { valid: false };
+  const validWord = /^[a-zA-Z'\-]{1,}$/;
+  if (!words.every((w) => validWord.test(w))) return { valid: false };
+  const noise = new Set(['uh', 'um', 'ah', 'er', 'hmm', 'yes', 'no', 'okay', 'ok', 'hi', 'hello', 'hey']);
+  if (words.length === 1 && noise.has(words[0].toLowerCase())) return { valid: false };
+  const normalized = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  return { valid: true, value: normalized };
+}
+
+--- Phone Validation (server/src/lib/validators.ts:81-95) ---
+export function validatePhone(raw: string): ValidationResult {
+  let s = expandSpokenDigits(raw);
+  s = s.replace(/[\s\-().+]/g, '');
+  s = s.replace(/^91/, '');
+  s = s.replace(/^0/, '');
+  const match = s.match(/([6-9]\d{9})/);
+  if (!match) return { valid: false };
+  return { valid: true, value: match[1] };
+}
+
+--- Date Validation (server/src/lib/validators.ts:207-221) ---
+export function validateDate(raw: string): ValidationResult {
+  const d = parseNaturalDate(raw);
+  if (!d || isNaN(d.getTime())) return { valid: false };
+  const today = startOfDay(new Date());
+  if (d < today) return { valid: false };
+  if (!CLINIC_OPEN_DAYS.includes(d.getDay())) return { valid: false };
+  return { valid: true, value: formatDate(d) };
+}
+
+--- Time Validation (server/src/lib/validators.ts:285-303) ---
+export function validateTime(raw: string): ValidationResult {
+  const t = parseNaturalTime(raw);
+  if (!t) return { valid: false };
+  if (t.hour < CLINIC_OPEN_HOUR || t.hour >= CLINIC_CLOSE_HOUR) return { valid: false };
+  const ampm = t.hour >= 12 ? 'PM' : 'AM';
+  const displayHour = t.hour % 12 || 12;
+  const displayMinute = t.minute.toString().padStart(2, '0');
+  return { valid: true, value: `${displayHour}:${displayMinute} ${ampm}` };
+}
+
+--- Main Turn Processing Dispatcher (server/src/lib/engine.ts:397-478) ---
+export async function processConversationTurn(
+  workflowId: string,
+  userMessage: string,
+  sessionId?: string
+): Promise<{ sessionId: string; reply: string; replyPhraseKey?: string; toolCallExecuted?: string; savedCallId?: string }> {
+  const session = await getOrCreateSession(workflowId, sessionId);
+  session.currentLanguage = detectLanguageFromText(userMessage);
+  const userMsgId = `msg_user_${Date.now()}`;
+  session.clientMessages.push({ id: userMsgId, role: 'user', content: userMessage, timestamp: new Date().toISOString() });
+  session.openAiMessages.push({ role: 'user', content: userMessage });
+  const { openai, isConfigured, modelName } = getAIClient();
+  let reply = '';
+  let replyPhraseKey: string | undefined;
+  let toolCallExecuted: string | undefined;
+  const state = session.intakeState;
+
+  if (state === 'completed') {
+    reply = PHRASES.yes_confirm;
+    replyPhraseKey = 'yes_confirm';
+  } else if (state === 'awaiting_confirmation') {
+    if (isConfirmationYes(userMessage)) {
+      const booking = await bookAppointment(session);
+      toolCallExecuted = 'create_calendar_event';
+      session.intakeState = 'completed';
+      session.isCompleted = true;
+      reply = PHRASES.yes_confirm;
+      replyPhraseKey = 'yes_confirm';
+    } else if (isConfirmationNo(userMessage)) {
+      session.intakeState = 'correcting';
+      reply = PHRASES.no_prompt;
+      replyPhraseKey = 'no_prompt';
+    } else {
+      reply = buildReadback(session.extractedFields);
+    }
+  } else if (state === 'correcting') {
+    const target = detectCorrectionTarget(userMessage);
+    if (target) {
+      delete session.extractedFields[target];
+      session.failCounts[target] = 0;
+      const slot = INTAKE_SLOTS.find((s) => s.key === target)!;
+      session.intakeState = slot.state;
+      reply = slotPhrase(slot, false);
+      replyPhraseKey = slot.question;
+    } else {
+      reply = PHRASES.no_prompt;
+      replyPhraseKey = 'no_prompt';
+    }
+  } else {
+    const slot = INTAKE_SLOTS.find((s) => s.state === state);
+    if (!slot) {
+      session.intakeState = 'collecting_name';
+      reply = PHRASES.ask_name;
+      replyPhraseKey = 'ask_name';
+    } else {
+      const candidate = isConfigured
+        ? await extractSlotValueWithLLM(userMessage, slot, openai, modelName)
+        : userMessage;
+      const result = slot.validate(candidate);
+      if (result.valid && result.value) {
+        session.extractedFields[slot.key] = result.value;
+        session.failCounts[slot.key] = 0;
+        const currentIdx = INTAKE_SLOTS.findIndex((s) => s.key === slot.key);
+        const nextSlot = INTAKE_SLOTS[currentIdx + 1];
+        if (nextSlot) {
+          session.intakeState = nextSlot.state;
+          const ack = buildAcknowledgement(slot.key, result.value);
+          reply = `${ack} ${slotPhrase(nextSlot, false)}`;
+          replyPhraseKey = nextSlot.question;
+        } else {
+          session.intakeState = 'awaiting_confirmation';
+          reply = buildReadback(session.extractedFields);
+        }
+      } else {
+        session.failCounts[slot.key] = (session.failCounts[slot.key] ?? 0) + 1;
+        const failures = session.failCounts[slot.key];
+        if (failures >= MAX_FAILURES_PER_SLOT) {
+          session.failCounts[slot.key] = 0;
+          reply = PHRASES.offer_text;
+          replyPhraseKey = 'offer_text';
+        } else {
+          const invalidKey = `sorry_invalid_${slot.key.replace('appt_', '')}` as keyof typeof PHRASES;
+          reply = failures === 1 ? (PHRASES[invalidKey] || slotPhrase(slot, true)) : slotPhrase(slot, true);
+          replyPhraseKey = slot.reask;
+        }
+      }
+    }
+  }
+  return { sessionId: session.sessionId, reply, replyPhraseKey, toolCallExecuted };
+}
+
+3.3 Fixed Phrases Catalog (server/src/lib/engine.ts:152-170)
+- greeting: 'Hello! Thank you for calling Apex Dental Care Clinic. May I have your name, please?'
+- ask_name: 'May I have your full name, please?'
+- ask_phone: 'Thank you. What is your phone number?'
+- ask_date: 'Which date would you like to come in?'
+- ask_time: 'And what time works for you?'
+- reask_name: "Sorry, I didn't catch that. Could you repeat your name, please?"
+- reask_phone: "Sorry, I didn't catch that. Could you repeat your phone number, please?"
+- reask_date: "Sorry, I didn't catch that. Could you repeat the date you'd like, please?"
+- reask_time: "Sorry, I didn't catch that. Could you repeat the time you'd prefer, please?"
+- offer_text: "I'm having trouble understanding. Could you please type your response in the chat box below?"
+- confirm_prompt: 'Shall I go ahead and book this appointment for you?'
+- yes_confirm: "Perfect! Your appointment has been booked. We'll see you then. Thank you for calling Apex Dental Care Clinic!"
+- no_prompt: 'No problem. Which detail would you like to change — your name, phone number, date, or time?'
+- sorry_invalid_name: "I'm sorry, that doesn't sound like a valid name. Could you please say your full name?"
+- sorry_invalid_phone: "I'm sorry, that doesn't look like a valid 10-digit Indian mobile number. Please try again."
+- sorry_invalid_date: "I'm sorry, I couldn't understand that date, or it might be in the past. Could you say the date again?"
+- sorry_invalid_time: "I'm sorry, I couldn't understand that time, or it falls outside our clinic hours of 9 AM to 7 PM. Could you say the time again?"
+
+Extraction Prompts sent to Sarvam LLM:
+- caller_name: 'Extract the caller\'s name from the following sentence. Output ONLY the name, nothing else. If no name is present, output "NONE".\nInput: "${userText}"\nName:'
+- phone_number: 'Extract a 10-digit Indian mobile number from the following sentence. Expand spoken words (e.g. "nine eight" → "98"). Output ONLY the digits, nothing else. If none, output "NONE".\nInput: "${userText}"\nPhone:'
+- appt_date: 'Extract the appointment date from the following sentence. Output ONLY the date phrase (e.g. "tomorrow", "next Monday", "22 September"). If none, output "NONE".\nInput: "${userText}"\nDate:'
+- appt_time: 'Extract the appointment time from the following sentence. Output ONLY the time phrase (e.g. "4 pm", "11:30 am"). If none, output "NONE".\nInput: "${userText}"\nTime:'
+
+3.4 Fallback Paths
+- Sarvam LLM Extraction Fails / 429: Catches error in server/src/lib/engine.ts:223-231, logs warning, and uses raw userText as fallback for regex validation.
+- Missing SARVAM_API_KEY: engine.ts:60 returns isConfigured: false, feeding raw transcript directly to regex validators.
+- 3 Consecutive Failures: engine.ts:513 returns PHRASES.offer_text inviting user to type response in chat box.
+- Server TTS Synthesis Error: server/src/routes/voice.ts:50 returns audioBase64: null, causing client to fall back to browser speechSynthesis.
+- Google Calendar Missing Credentials: server/src/lib/tools/calendar.ts:16 bypasses Calendar API and records booking in Firestore as simulated success.
+
+
+================================================================================
+4. CLIENT VOICE FLOW (VoiceView.tsx)
+================================================================================
+
+4.1 State Machine & Hands-Free Loop
+States:
+- Initializing: Mount fetches session greeting.
+- AI Assistant Speaking...: isPlayingAudio = true. Barge-in monitor listening.
+- Listening — Turn Active: isRecording = true. Mic open, VAD checking for silence.
+- Processing AI response...: isProcessing = true. Audio Blob sent to /api/conversations/:workflowId/voice.
+- Call Session Completed: isCompleted = true. Session saved to Firestore.
+
+Hands-Free Loop:
+1. Assistant finishes speaking -> triggerAutoListen() triggers after 400ms delay.
+2. startRecording() initializes mic stream, audio analyser, and MediaRecorder.
+3. Audio meter calculates volume. When user stops speaking for VAD_SILENCE_MS (2000ms), stopRecording() is called.
+4. submitTurn() sends audio blob to server.
+5. Response arrives -> assistant speaks audio -> triggers step 1 again.
+
+4.2 Code Excerpts
+
+--- Browser Speech Synthesis (client/src/pages/VoiceView.tsx:834-874) ---
+const speakBrowserTTS = (rawText: string, onAllDone?: () => void) => {
+  try {
+    if (!('speechSynthesis' in window)) {
+      addVoiceLog(rawText, 'error', 'SpeechSynthesis API not supported in browser');
+      if (onAllDone) onAllDone();
+      else triggerAutoListen();
+      return;
+    }
+    cancelAllSpeech();
+    const normalized = normalizeForSpeech(rawText);
+    const chunks = chunkTextForSpeech(normalized, 180);
+    if (chunks.length === 0) {
+      if (onAllDone) onAllDone();
+      else triggerAutoListen();
+      return;
+    }
+    speechQueueRef.current = [...chunks];
+    const playNextChunk = () => {
+      if (speechQueueRef.current.length === 0) {
+        setIsPlayingAudio(false);
+        isPlayingAudioRef.current = false;
+        currentSpeakingTextRef.current = '';
+        stopBargeInMonitor();
+        if (onAllDone) onAllDone();
+        else triggerAutoListen();
+        return;
+      }
+      const chunk = speechQueueRef.current.shift()!;
+      currentSpeakingTextRef.current = chunk;
+      const utterance = new SpeechSynthesisUtterance(chunk);
+      activeUtterancesRef.current.push(utterance); // Prevents Chrome GC bug
+      const voice = availableVoices.find((v) => v.voiceURI === selectedVoiceURI);
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+      } else {
+        utterance.lang = workflowId?.includes('hindi') ? 'hi-IN' : 'en-IN';
+      }
+      utterance.rate = speechRate;
+      utterance.pitch = speechPitch;
+      window.speechSynthesis.speak(utterance);
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    };
+    playNextChunk();
+  } catch (err: any) {
+    setIsPlayingAudio(false);
+    isPlayingAudioRef.current = false;
+    stopBargeInMonitor();
+    triggerAutoListen();
+  }
+};
+
+--- Auto-Submit / Silence Detection (client/src/pages/VoiceView.tsx:40-45, 532-555) ---
+const VAD_SPEECH_THRESHOLD = 20;      // Volume % above which user is speaking
+const BARGE_IN_SPEECH_THRESHOLD = 50; // Threshold during AI speech to overcome speaker echo
+const VAD_SILENCE_MS = 2000;          // Ms of silence before auto-submitting turn
+const BARGE_IN_DETECT_MS = 300;       // Ms of speech required to trigger barge-in
+const MAX_TURN_MS = 10000;            // Safety cap: auto-submit after 10s
+
+const now = Date.now();
+if (vol >= VAD_SPEECH_THRESHOLD) {
+  if (!hasSpokenRef.current) console.log('[VAD] Speech detected! Volume:', vol);
+  hasSpokenRef.current = true;
+  lastSpeechTimeRef.current = now;
+} else if (hasSpokenRef.current && now - lastSpeechTimeRef.current >= VAD_SILENCE_MS) {
+  console.log(`[VAD] ${VAD_SILENCE_MS}ms silence after speech. Auto-submitting...`);
+  stopRecording();
+  return;
+}
+
+--- Barge-In Logic (client/src/pages/VoiceView.tsx:288-348) ---
+const startBargeInMonitor = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    bargeInStreamRef.current = stream;
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    bargeInAnalyserRef.current = analyser;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const check = () => {
+      if (!isPlayingAudioRef.current) { stopBargeInMonitor(); return; }
+      analyser.getByteFrequencyData(data);
+      let maxVal = 0;
+      for (let i = 0; i < data.length; i++) if (data[i] > maxVal) maxVal = data[i];
+      const vol = (maxVal / 255) * 100;
+      if (vol >= BARGE_IN_SPEECH_THRESHOLD) {
+        if (!bargeInStartTimeRef.current) bargeInStartTimeRef.current = Date.now();
+        const speechDuration = Date.now() - bargeInStartTimeRef.current;
+        if (speechDuration >= BARGE_IN_DETECT_MS) {
+          handleBargeIn();
+          return;
+        }
+      } else {
+        bargeInStartTimeRef.current = null;
+      }
+      bargeInFrameRef.current = requestAnimationFrame(check);
+    };
+    bargeInFrameRef.current = requestAnimationFrame(check);
+  } catch (err) {
+    console.warn('[Barge-in] Could not start monitor:', err);
+  }
+};
+
+const handleBargeIn = () => {
+  cancelAllSpeech();
+  abortControllerRef.current?.abort();
+  setMessages((prev) => {
+    const updated = [...prev];
+    for (let i = updated.length - 1; i >= 0; i--) {
+      if (updated[i].role === 'assistant') {
+        updated[i] = { ...updated[i], content: updated[i].content + ' [interrupted]' };
+        break;
+      }
+    }
+    return updated;
+  });
+  stopBargeInMonitor();
+  setIsPlayingAudio(false);
+  isPlayingAudioRef.current = false;
+  triggerAutoListen();
+};
+
+4.3 speechSynthesis Calls Audit
+- Line 181: window.speechSynthesis.cancel() in cancelAllSpeech() to reset utterance queue and stop audio immediately.
+- Line 487: window.speechSynthesis.cancel() in startRecording() to stop assistant speech when user begins answering.
+- Line 653: window.speechSynthesis.cancel() in pauseContinuousSession() to silence speech on user pause.
+- Line 752: window.speechSynthesis.cancel() in handleSendText() to silence speech when typing a text turn.
+- Line 941: window.speechSynthesis.speak(utterance) in speakBrowserTTS() to speak the normalized clause.
+- Line 945: window.speechSynthesis.resume() in speakBrowserTTS() to recover from Chromium synthesis pause bug.
+
+4.4 Recognition Settings
+- continuous: true
+- interimResults: true
+- lang: workflowId?.includes('hindi') ? 'hi-IN' : 'en-IN'
+- maxAlternatives: not specified (defaults to 1)
+- Echo suppression: client/src/pages/VoiceView.tsx:580-583 filters recognized text matching currentSpeakingTextRef.current to discard speaker echo.
+
+4.5 Voice Selection Logic
+Preferred priority order in client/src/pages/VoiceView.tsx:208-235:
+1. Indian English voice (en-IN, e.g. Google Indian English, Heera, Veena, Ravi, Rishi).
+2. High-quality / natural English voice (containing 'natural', 'google', or 'premium').
+3. Any English voice starting with 'en'.
+4. Default first available voice.
+
+
+================================================================================
+5. SERVER ROUTES AND LIMITS
+================================================================================
+
+5.1 Route Inventory
+
+GET  /api/health                                -> System health check (0 external calls)
+GET  /api/test-db                               -> Firestore DB connectivity test (Calls Firestore)
+GET  /api/businesses                            -> List dental clinics (Calls Firestore)
+POST /api/businesses                            -> Create/update dental clinic (Calls Firestore)
+GET  /api/workflows                             -> List workflows (Calls Firestore)
+POST /api/workflows                             -> Create workflow (Calls Firestore)
+GET  /api/workflows/:id                         -> Get workflow by ID (Calls Firestore)
+PUT  /api/workflows/:id                         -> Update workflow (Calls Firestore)
+POST /api/workflows/seed-demo                   -> Seed Apex Dental Care Clinic (Calls Firestore)
+POST /api/conversations/:workflowId/message     -> Text turn (Calls Sarvam LLM if ambiguous, Sarvam TTS if uncached, Firestore call log)
+POST /api/conversations/:workflowId/voice       -> Audio turn (Calls Sarvam STT saaras:v3, Sarvam LLM if ambiguous, Sarvam TTS if uncached, Firestore call log, Google Calendar if booking)
+GET  /api/conversations/:workflowId/:sessionId/export -> Export call transcript (Calls Firestore)
+POST /api/conversations/:workflowId/reset       -> Reset in-memory session (0 external calls)
+GET  /api/calls                                 -> Get call records (Calls Firestore)
+GET  /api/calls/:callId                         -> Get single call record (Calls Firestore)
+
+5.2 External Requests per Voice Turn
+- Sarvam Voice Mode (fixed phrase): 1 call (1 STT saaras:v3 + 0 LLM + 0 TTS cache hit + 1 async Firestore write).
+- Sarvam Voice Mode (dynamic / readback): 2 to 3 calls (1 STT saaras:v3 + 1 LLM sarvam-105b extraction + 1 TTS bulbul:v3 + 1 async Firestore write).
+- Browser Speech Mode (client TTS): 0 to 1 calls (0 external TTS + 0 external STT + 1 LLM only if ambiguous).
+
+5.3 Rate Limiting, Throttling & Caching Logic
+- Sarvam Exponential Backoff & Retry (server/src/lib/sarvam.ts:65-120): fetchWithRetry() retries HTTP 429 and 500-504 up to 3 times with exponential backoff (500ms doubling to 4000ms), 15000ms timeout cap.
+- TTS In-Memory Cache (server/src/lib/voice/ttsCache.ts:1-120): Pre-caches all 18 fixed clinic intake phrases in memory on boot.
+- Client Barge-In Request Cancellation (client/src/pages/VoiceView.tsx:71, 284, 541): abortControllerRef aborts in-flight /voice HTTP requests if user interrupts.
+
+
+================================================================================
+6. LIVE CHECKS
+================================================================================
+
+6.1 Type Checks and Production Builds
+- Client (npm run build): Code 0 (Success). built in 23.64s. 0 errors.
+- Server (npm run build): Code 0 (Success). Transpiled to dist/. 0 errors.
+
+6.2 API Diagnostics (server/src/scripts/test-apis.ts)
+- Sarvam LLM (sarvam-105b-conversations): 589ms (HTTP 200, Success)
+- Sarvam STT (saaras:v3): 388ms (HTTP 200, Success)
+- Sarvam TTS (bulbul:v3 - ritu): 922ms (HTTP 200, 135520 bytes WAV, Success)
+- TTS Cache Warmup: 18/18 phrases cached in 2473ms (Success)
+- All Sarvam tests passed!
+
+6.3 Live Conversation Turn Test (against running dev server port 5000)
+- Turn 1 (Greeting Init): POST /api/conversations/demo_dental_workflow/message -> Success: true, Session: session_1789835833919_mvrl8, Reply: "Hello! Thank you for calling Apex Dental Care Clinic. May I have your name, please?"
+- Turn 2 (Name Provision): POST /api/conversations/demo_dental_workflow/message with "My name is Ramesh Kumar" -> Success: true, Reply: "Thank you, Ramesh Kumar. Thank you. What is your phone number?", Extracted: { caller_name: "Ramesh Kumar" }.
+
+6.4 Sarvam Error Logs
+- 429 / Quota / Credit Errors: None observed. All requests succeeded.
+
+
+================================================================================
+7. KNOWN ISSUES AND RISKS
+================================================================================
+
+1. Valid Names Being Rejected (>4 words):
+   - Location: server/src/lib/validators.ts:37
+   - Cause: words.length > 4 rejects names with more than 4 words. Long Indian names or names spoken with honorifics/prefixes (e.g. "Venkata Ramanathan Subramanian Iyer Sharma") fail validation and trigger a re-ask.
+
+2. Single Initial Names Rejected if Stripped:
+   - Location: server/src/lib/validators.ts:33
+   - Cause: cleaned.length < 2 rejects single-letter inputs. While full names like "Ramesh Kumar S" succeed, single-letter surname answers fail.
+
+3. Browser Echo at High Speaker Volumes:
+   - Location: client/src/pages/VoiceView.tsx:320-330
+   - Cause: If external laptop speakers are set to 100% volume without headphones, physical acoustic feedback into the mic can exceed BARGE_IN_SPEECH_THRESHOLD (50%) and interrupt the assistant mid-sentence.
+
+4. SpeechSynthesis Pausing in Inactive Background Tabs:
+   - Location: client/src/pages/VoiceView.tsx:944-946
+   - Cause: Chromium engines throttle speechSynthesis and timers when the tab is blurred or backgrounded. A resume workaround (window.speechSynthesis.resume()) is present, but active tab focus is optimal.
+
+5. Google Calendar Credentials Missing in Environment:
+   - Location: server/src/lib/tools/calendar.ts:16-19
+   - Cause: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are placeholders. The app gracefully falls back to Firestore-only booking, but calendar event creation is simulated.
+
+6. Audio Always Sent to Server STT:
+   - Location: client/src/pages/VoiceView.tsx:501
+   - Cause: In continuous mode, the client always uploads the audio blob to /voice, consuming Sarvam STT quota on every turn even though the browser already computed a transcript via Web Speech API.
+
+================================================================================
+END OF REPORT
+================================================================================

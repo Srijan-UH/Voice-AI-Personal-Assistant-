@@ -5,7 +5,7 @@ export * from './calendar.js';
 export * from './crm.js';
 
 /**
- * Execute tool calls requested by the AI Engine (OpenAI/Gemini function calling)
+ * Execute tool calls requested by the AI Engine
  */
 export async function executeToolCall(toolName: string, args: any): Promise<any> {
   console.log(`[Tool Execution Dispatcher] Routing tool "${toolName}" with args:`, args);

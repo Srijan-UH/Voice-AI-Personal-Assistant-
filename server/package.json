@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:apis": "tsx src/scripts/test-apis.ts",
+    "test:normalizer": "tsx src/scripts/test-normalizer.ts",
+    "test:slots": "tsx src/scripts/test-slots.ts"
   },
   "dependencies": {
-    "@deepgram/sdk": "^5.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

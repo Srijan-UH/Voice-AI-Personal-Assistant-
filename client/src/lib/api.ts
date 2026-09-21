@@ -5,6 +5,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000
 export interface HealthResponse {
   status: string;
   service: string;
+  voiceMode?: 'browser' | 'sarvam-static' | 'sarvam';
   timestamp: string;
 }
 
@@ -20,14 +21,17 @@ export interface ChatTurnResponse {
   success: boolean;
   sessionId: string;
   reply: string;
+  replyText?: string;       // alias used by voice route
   userText?: string;
   audioBase64?: string | null;
+  fromCache?: boolean;
   toolCallExecuted?: string;
   messages: ChatMessageItem[];
   extractedFields: Record<string, any>;
   isCompleted: boolean;
   closingMessage?: string;
   savedCallId?: string;
+  perf?: { sttMs: number; engineMs: number; ttsMs: number; totalMs: number };
 }
 
 export interface CallWithDetails extends Call {
@@ -148,12 +152,14 @@ export async function sendChatMessage(
 }
 
 /**
- * Send recorded microphone audio to Voice Engine (Deepgram STT -> AI Engine -> ElevenLabs TTS)
+ * Send recorded microphone audio to Voice Engine (Sarvam STT -> AI Engine -> Sarvam TTS)
+ * Pass an AbortSignal to cancel in-flight requests on barge-in.
  */
 export async function sendVoiceMessage(
   workflowId: string,
   audioBlob: Blob,
-  sessionId?: string
+  sessionId?: string,
+  signal?: AbortSignal
 ): Promise<ChatTurnResponse> {
   const formData = new FormData();
   formData.append('audio', audioBlob, 'microphone_recording.webm');
@@ -164,6 +170,7 @@ export async function sendVoiceMessage(
   const response = await fetch(`${API_BASE_URL}/api/conversations/${workflowId}/voice`, {
     method: 'POST',
     body: formData,
+    signal,
   });
 
   const result = await response.json();

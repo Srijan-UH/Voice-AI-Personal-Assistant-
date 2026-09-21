@@ -8,6 +8,7 @@ import workflowsRouter from './routes/workflows.js';
 import conversationsRouter from './routes/conversations.js';
 import voiceRouter from './routes/voice.js';
 import callsRouter from './routes/calls.js';
+import { logProviderSummary } from './lib/providerInfo.js';
 
 dotenv.config();
 
@@ -48,6 +49,17 @@ app.get('/', (_req, res) => {
   });
 });
 
+import { getAIClient } from './lib/engine.js';
+
 app.listen(PORT, () => {
   console.log(`[server]: Express server running on port ${PORT}`);
+  const aiStatus = getAIClient();
+  if (aiStatus.isConfigured) {
+    console.log(`[server]: AI Engine Active -> Provider/Model: "${aiStatus.modelName}"`);
+  } else {
+    console.log(`[server]: AI Engine Warning -> No API Key configured in server/.env`);
+  }
+
+  // Always log the active provider summary (key presence, never key values)
+  logProviderSummary();
 });

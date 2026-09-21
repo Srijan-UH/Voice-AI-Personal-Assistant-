@@ -250,6 +250,11 @@ export const Home: React.FC = () => {
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-600"></span>
           </span>
           AI Voice Agents &bull; Category-Based Missed Call Automation
+          {health?.voiceMode && (
+            <span className="ml-2 px-2 py-0.5 rounded-md bg-indigo-600 text-white text-[10px] font-extrabold uppercase">
+              Mode: {health.voiceMode}
+            </span>
+          )}
         </div>
 
         <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-slate-900 leading-tight">

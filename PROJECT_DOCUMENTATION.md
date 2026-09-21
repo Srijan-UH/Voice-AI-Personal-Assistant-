@@ -3,7 +3,7 @@
 ## 1. README & Setup Instructions
 
 ### Overview
-A production-grade, multi-lingual, voice-enabled AI Personal Assistant web application built with **React (Vite)**, **Node.js / Express**, **Google Gemini / OpenAI Engine**, **Google Calendar API**, **Deepgram Speech-to-Text**, **ElevenLabs Text-to-Speech**, and **Firebase Firestore**.
+A production-grade, multi-lingual, voice-enabled AI Personal Assistant web application built with **React (Vite)**, **Node.js / Express**, **Sarvam AI Engine**, **Google Calendar API**, and **Firebase Firestore**.
 
 Designed for small business owners (e.g., dental clinics, artisan bakeries, service intake) to automatically handle caller inquiries, collect structured intake data, execute calendar bookings, look up CRM order statuses, and persist call records in Firestore.
 
@@ -53,7 +53,7 @@ npm run dev     # Starts frontend on http://localhost:5173
                | User Text             | Audio MP3 Base64             |
                v                       |                              v
 +--------------------------------------+--------------------------------------------+
-|                             AI ENGINE (GEMINI / OPENAI)                           |
+|                             AI ENGINE (SARVAM AI)                         |
 |    - System Prompt Generator with Function Calling Tools Array                    |
 +--------------------------------------+--------------------------------------------+
                                        |
@@ -153,8 +153,8 @@ PORT=5000
 CLIENT_ORIGIN=http://localhost:5173
 
 # AI Engine Credentials
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-3.6-flash
+SARVAM_API_KEY=your_sarvam_api_key_here
+SARVAM_MODEL=sarvam-105b
 
 # Firebase Admin SDK Credentials
 FIREBASE_PROJECT_ID=your_firebase_project_id_here

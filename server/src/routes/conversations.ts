@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { db } from '../lib/firebase.js';
 import { getOrCreateSession, processConversationTurn } from '../lib/engine.js';
 import { Business, Workflow } from '../types/db.js';
+import { synthesizeSpeechUniversal } from '../lib/voice/tts.js';
+import { ttsCache } from '../lib/voice/ttsCache.js';
 
 const router = Router();
 
@@ -19,13 +21,32 @@ router.post('/conversations/:workflowId/message', async (req: Request, res: Resp
     }
 
     if (!message && !sessionId) {
-      // Initialize brand new session
+      // Initialize brand new session — return greeting with TTS audio
       const session = await getOrCreateSession(workflowId);
       const openingMessage = session.clientMessages[0]?.content || session.workflow.greetingMessage;
+
+      // If VOICE_MODE is browser, let the browser SpeechSynthesis API read the text
+      const isBrowserVoice = (process.env.VOICE_MODE || 'browser').trim().toLowerCase() === 'browser';
+      let audioBase64: string | null = null;
+
+      if (!isBrowserVoice) {
+        audioBase64 = ttsCache.getBase64('greeting');
+        if (!audioBase64) {
+          try {
+            const ttsResult = await synthesizeSpeechUniversal(openingMessage);
+            if (ttsResult?.audioBuffer) {
+              ttsCache.save(openingMessage, ttsResult.audioBuffer, ttsResult.mimeType, 'greeting');
+              audioBase64 = `data:${ttsResult.mimeType};base64,${ttsResult.audioBuffer.toString('base64')}`;
+            }
+          } catch {}
+        }
+      }
+
       return res.status(200).json({
         success: true,
         sessionId: session.sessionId,
         reply: openingMessage,
+        audioBase64,
         messages: session.clientMessages,
         extractedFields: session.extractedFields,
         isCompleted: session.isCompleted,
@@ -39,10 +60,36 @@ router.post('/conversations/:workflowId/message', async (req: Request, res: Resp
 
     const result = await processConversationTurn(workflowId, message, sessionId);
 
+    // Serve TTS audio for text-mode turns too (cache-first), unless VOICE_MODE is browser
+    const isBrowserVoice = (process.env.VOICE_MODE || 'browser').trim().toLowerCase() === 'browser';
+    let audioBase64: string | null = null;
+
+    if (!isBrowserVoice) {
+      if (result.replyPhraseKey) {
+        const cached = ttsCache.get(result.replyPhraseKey);
+        if (cached && cached.text.trim().toLowerCase() === result.reply.trim().toLowerCase()) {
+          audioBase64 = ttsCache.getBase64(result.replyPhraseKey);
+        }
+      }
+      if (!audioBase64) {
+        audioBase64 = ttsCache.getBase64ByText(result.reply);
+      }
+      if (!audioBase64) {
+        try {
+          const ttsResult = await synthesizeSpeechUniversal(result.reply);
+          if (ttsResult?.audioBuffer) {
+            ttsCache.save(result.reply, ttsResult.audioBuffer, ttsResult.mimeType, result.replyPhraseKey);
+            audioBase64 = `data:${ttsResult.mimeType};base64,${ttsResult.audioBuffer.toString('base64')}`;
+          }
+        } catch {}
+      }
+    }
+
     return res.status(200).json({
       success: true,
       sessionId: result.session.sessionId,
       reply: result.reply,
+      audioBase64,
       toolCallExecuted: result.toolCallExecuted,
       messages: result.session.clientMessages,
       extractedFields: result.session.extractedFields,

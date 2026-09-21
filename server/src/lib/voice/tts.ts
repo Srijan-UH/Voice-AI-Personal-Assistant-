@@ -1,57 +1,56 @@
 import dotenv from 'dotenv';
+import { synthesize as sarvamSynthesize, SarvamTtsResult } from '../sarvam.js';
+import { normalizeForSpeech } from '../speechNormalizer.js';
 
 dotenv.config();
 
-/**
- * Convert AI assistant reply text to speech audio using official OpenAI Text-to-Speech API (tts-1).
- * Uses GEMINI_API_KEY or OPENAI_API_KEY from server/.env.
- */
-export async function synthesizeSpeechWithOpenAI(
-  text: string,
-  voice: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' = 'alloy'
-): Promise<{ audioBuffer: Buffer; mimeType: string } | null> {
-  dotenv.config();
-
-  const openAiKey = process.env.GEMINI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
-
-  if (openAiKey && openAiKey.startsWith('sk-') && !openAiKey.includes('your_openai_api_key')) {
-    try {
-      console.log(`[OpenAI TTS] Synthesizing speech with model "tts-1" for: "${text.slice(0, 60)}..."`);
-
-      const response = await fetch('https://api.openai.com/v1/audio/speech', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${openAiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'tts-1',
-          input: text,
-          voice,
-          response_format: 'mp3',
-        }),
-      });
-
-      if (response.ok) {
-        const arrayBuffer = await response.arrayBuffer();
-        const audioBuffer = Buffer.from(arrayBuffer);
-        console.log(`[OpenAI TTS] Speech synthesized successfully (${audioBuffer.length} bytes MP3).`);
-        return {
-          audioBuffer,
-          mimeType: 'audio/mp3',
-        };
-      } else {
-        const errText = await response.text();
-        console.warn(`[OpenAI TTS Warning] HTTP ${response.status}: ${errText}`);
-      }
-    } catch (err: any) {
-      console.warn('[OpenAI TTS Exception]:', err.message || err);
-    }
-  }
-
-  console.log('[OpenAI TTS] OpenAI API key not configured or API call failed.');
-  return null;
+export interface TtsResult {
+  audioBuffer: Buffer;
+  mimeType: string;
+  provider: string;
+  latencyMs: number;
 }
 
-// Keep export alias for backwards compatibility
-export const synthesizeSpeechWithElevenLabs = synthesizeSpeechWithOpenAI;
+/**
+ * Sarvam AI TTS (Bulbul v3)
+ */
+export async function synthesizeWithSarvam(text: string): Promise<TtsResult> {
+  const model = process.env.SARVAM_TTS_MODEL || 'bulbul:v3';
+  const speaker = process.env.SARVAM_TTS_VOICE || 'ritu';
+
+  const res: SarvamTtsResult = await sarvamSynthesize(text, {
+    model,
+    speaker,
+    languageCode: 'en-IN',
+  });
+
+  console.log(`[TTS] Sarvam ${model} (${speaker}) → ${res.audioBuffer.length} bytes WAV | ${res.latencyMs}ms`);
+
+  return {
+    audioBuffer: res.audioBuffer,
+    mimeType: res.mimeType,
+    provider: 'sarvam',
+    latencyMs: res.latencyMs,
+  };
+}
+
+/**
+ * Universal TTS synthesizer.
+ * Exclusively uses Sarvam AI (Bulbul v3).
+ *
+ * Returns null if Sarvam fails (client falls back to browser speechSynthesis as safety net).
+ */
+export async function synthesizeSpeechUniversal(
+  text: string
+): Promise<{ audioBuffer: Buffer; mimeType: string } | null> {
+  if (!text || text.trim().length === 0) return null;
+
+  try {
+    const normalized = normalizeForSpeech(text);
+    const result = await synthesizeWithSarvam(normalized);
+    return { audioBuffer: result.audioBuffer, mimeType: result.mimeType };
+  } catch (err: any) {
+    console.error(`[TTS] Sarvam synthesis failed: ${err.message}`);
+    return null;
+  }
+}

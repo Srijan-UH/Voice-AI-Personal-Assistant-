@@ -10,7 +10,7 @@ services:
         value: 5000
       - key: CLIENT_ORIGIN
         sync: false
-      - key: GEMINI_API_KEY
+      - key: SARVAM_API_KEY
         sync: false
       - key: DEEPGRAM_API_KEY
         sync: false

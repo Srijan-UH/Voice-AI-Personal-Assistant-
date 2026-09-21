@@ -1,6 +1,6 @@
 # Voice AI Personal Assistant — Full-Stack Web App
 
-A production-grade, multi-lingual, voice-enabled AI Personal Assistant web application built with **React**, **Node.js / Express**, **Google Gemini / OpenAI AI Engine**, **Google Calendar API**, **Deepgram Speech-to-Text**, **ElevenLabs Text-to-Speech**, and **Firebase Firestore**.
+A production-grade, multi-lingual, voice-enabled AI Personal Assistant web application built with **React**, **Node.js / Express**, **Sarvam AI Engine**, **Google Calendar API**, and **Firebase Firestore**.
 
 Designed for small business owners (e.g., dental clinics, artisan bakeries, service intake) to automatically handle caller inquiries, collect structured intake data, execute calendar bookings, look up CRM order statuses, and persist call records in Firestore.
 
@@ -27,7 +27,7 @@ Designed for small business owners (e.g., dental clinics, artisan bakeries, serv
 ## 🛠 Tech Stack
 
 - **Frontend**: React (TypeScript), Vite, React Router DOM, TailwindCSS, Lucide Icons, HTML5 MediaRecorder.
-- **Backend**: Node.js, Express (TypeScript), Firebase Admin SDK, OpenAI API / Google Gemini API, Google APIs (OAuth2 & Calendar v3), Deepgram SDK / REST, ElevenLabs API, Multer.
+- **Backend**: Node.js, Express (TypeScript), Firebase Admin SDK, Sarvam AI API, Google APIs (OAuth2 & Calendar v3), Multer.
 - **Database**: Firebase Firestore (Native mode).
 
 ---
@@ -45,8 +45,8 @@ PORT=5000
 CLIENT_ORIGIN=http://localhost:5173
 
 # AI Engine Credentials
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-1.5-flash
+SARVAM_API_KEY=your_sarvam_api_key_here
+SARVAM_MODEL=sarvam-105b
 
 # Firebase Admin SDK Credentials
 FIREBASE_PROJECT_ID=your_firebase_project_id_here
@@ -98,7 +98,7 @@ Open your browser to `http://localhost:5173`.
 1. Create a Web Service on [Render Dashboard](https://dashboard.render.com/).
 2. Set **Root Directory** to `server`.
 3. Build Command: `npm install && npm run build` | Start Command: `npm start`.
-4. Add Environment Variables (`GEMINI_API_KEY`, `FIREBASE_PROJECT_ID`, etc.).
+4. Add Environment Variables (`SARVAM_API_KEY`, `FIREBASE_PROJECT_ID`, etc.).
 5. Set `CLIENT_ORIGIN` to your Vercel URL.
 
 ---
@@ -127,7 +127,7 @@ Open your browser to `http://localhost:5173`.
                | User Text             | Audio MP3 Base64             |
                v                       |                              v
 +--------------------------------------+--------------------------------------------+
-|                             AI ENGINE (GEMINI / OPENAI)                           |
+|                             AI ENGINE (SARVAM AI)                         |
 |    - System Prompt Generator with Function Calling Tools Array                    |
 +--------------------------------------+--------------------------------------------+
                                        |
@@ -194,7 +194,7 @@ Stores call history log records and subcollections (`responses`, `transcript`).
 1. **Firestore Connection & Admin SDK**: Live write, read, and delete operations against Native mode Firestore.
 2. **Workflow Builder Wizard**: 5-step form at `/workflows/new` saving business profiles, custom intake fields, and conditional rule logic to Firestore.
 3. **Generic AI Conversation Engine**: Data-driven system prompt builder driving Dental Clinic, Artisan Cake Shop, and Hindi Clinic workflows on identical backend engine.
-4. **OpenAI / Gemini Function Calling**: Modular agent tools in `/server/src/lib/tools/`.
+4. **AI Agent Tool Calling**: Modular agent tools in `/server/src/lib/tools/`.
 5. **Google Calendar Integration**: Backend OAuth2 client executing `check_calendar_availability` and `create_calendar_event`.
 6. **CRM & Order Tracking Tool**: `lookup_order_status` and `lookup_crm_customer_history` tools callable mid-conversation.
 7. **Voice Input/Output Layer**: Deepgram Speech-to-Text (Nova-2) and ElevenLabs Text-to-Speech (Rachel) with React voice assistant page (`/voice/:workflowId`).

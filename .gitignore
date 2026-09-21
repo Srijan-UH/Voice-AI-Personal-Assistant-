@@ -6,6 +6,8 @@ node_modules/
 dist/
 build/
 out/
+.cache/
+server/.cache/
 
 # Environment variables
 .env
