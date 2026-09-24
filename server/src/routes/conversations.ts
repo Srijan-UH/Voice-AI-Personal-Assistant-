@@ -20,7 +20,7 @@ router.post('/conversations/:workflowId/message', async (req: Request, res: Resp
       return res.status(400).json({ success: false, message: 'Workflow ID is required in URL parameter.' });
     }
 
-    if (!message && !sessionId) {
+    if (!message || (typeof message === 'string' && message.trim().length === 0)) {
       // Initialize brand new session — return greeting with TTS audio
       const session = await getOrCreateSession(workflowId);
       const openingMessage = session.clientMessages[0]?.content || session.workflow.greetingMessage;

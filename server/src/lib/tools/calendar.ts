@@ -205,19 +205,17 @@ export async function createCalendarEvent(args: {
         message: `Appointment "${args.summary}" successfully created in Google Calendar.`,
       };
     } catch (err: any) {
-      console.warn('[Calendar Tool] Google API error, falling back to simulated event creation:', err.message);
+      console.warn('[Calendar Tool] Google API error:', err.message);
+      return {
+        success: false,
+        message: `Google Calendar API error: ${err.message}`,
+      };
     }
   }
 
-  const simulatedId = `evt_gcal_${Date.now().toString(36)}`;
   return {
-    success: true,
-    eventId: simulatedId,
-    summary: args.summary,
-    start: args.startIso,
-    end: args.endIso,
-    htmlLink: `https://calendar.google.com/calendar/event?eid=${simulatedId}`,
-    message: `[Google Calendar API] Created event "${args.summary}" from ${args.startIso} to ${args.endIso}.`,
+    success: false,
+    message: 'Google Calendar API is not configured or authenticated in this environment.',
   };
 }
 

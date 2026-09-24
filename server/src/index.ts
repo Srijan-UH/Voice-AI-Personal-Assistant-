@@ -10,7 +10,8 @@ import voiceRouter from './routes/voice.js';
 import callsRouter from './routes/calls.js';
 import { logProviderSummary } from './lib/providerInfo.js';
 
-dotenv.config();
+dotenv.config({ override: true });
+// Environment reloaded with Sarvam AI pipeline
 
 const app = express();
 const PORT = process.env.PORT || 5000;

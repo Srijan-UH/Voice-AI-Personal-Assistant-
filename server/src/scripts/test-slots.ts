@@ -58,6 +58,15 @@ assert(myselfName === 'Amit', '"Myself Amit"', `got: ${myselfName}`);
 const callMeName = extractNameDeterministic('You can call me Sneha');
 assert(callMeName === 'Sneha', '"You can call me Sneha"', `got: ${callMeName}`);
 
+const fillerRamesh = extractNameDeterministic('uh Ramesh');
+assert(fillerRamesh === 'Ramesh', 'Filler with name "uh Ramesh"', `got: ${fillerRamesh}`);
+
+const devanagariRamesh = extractNameDeterministic('रमेश');
+assert(devanagariRamesh === 'रमेश', 'Devanagari script "रमेश"', `got: ${devanagariRamesh}`);
+
+const compoundRamesh = extractNameDeterministic('Ramesh and my number is 9876543210');
+assert(compoundRamesh === 'Ramesh', 'Compound phrase "Ramesh and my number is..."', `got: ${compoundRamesh}`);
+
 // Verify garbage is rejected as name
 const garbageAsName = extractNameDeterministic('uh yes okay');
 assert(garbageAsName === undefined, 'Noise words "uh yes okay" rejected as name', `got: ${garbageAsName}`);

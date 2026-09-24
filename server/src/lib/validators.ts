@@ -31,26 +31,36 @@ export function validateName(raw: string): ValidationResult {
 
   // Strip conversational intro phrases if present
   cleaned = cleaned.replace(/^(?:my\s+name\s+is|my\s+name's|i\s+am|i'm|this\s+is|myself|call\s+me|it's|it\s+is)\s+/i, '');
-  // Strip conversational suffixes like "here", "please"
+  // Strip common conversational filler words at the beginning
+  cleaned = cleaned.replace(/^(?:uh|um|ah|er|hmm|actually|yeah|sure|okay|ok|hi|hello|hey)\s*,?\s*/i, '');
+  // Strip conversational suffixes like "here", "please", "speaking"
   cleaned = cleaned.replace(/\s+(?:here|please|speaking)$/i, '');
   // Clean titles "Dr." -> "Dr"
   cleaned = cleaned.replace(/\b(dr|mr|mrs|ms|prof|shri|smt)\.\s*/gi, '$1 ');
 
-  cleaned = cleaned.replace(/[^a-zA-Z\s'\-]/g, '').trim();
+  // Allow Unicode letters (\p{L}) and marks/matras (\p{M}) alongside English letters, apostrophes, hyphens, spaces
+  cleaned = cleaned.replace(/[^\p{L}\p{M}\s'\-]/gu, '').trim();
 
   // Must be at least 2 characters
   if (cleaned.length < 2) return { valid: false };
 
-  // Max 4 words
-  const words = cleaned.split(/\s+/).filter(Boolean);
+  // Filter out pure noise tokens
+  const noise = new Set(['uh', 'um', 'ah', 'er', 'hmm', 'yes', 'no', 'okay', 'ok', 'hi', 'hello', 'hey', 'actually', 'yep']);
+
+  // Extract candidate words
+  let words = cleaned.split(/\s+/).filter(Boolean);
+  // Remove filler words if more than one word present
+  if (words.length > 1) {
+    const filtered = words.filter((w) => !noise.has(w.toLowerCase()));
+    if (filtered.length > 0) words = filtered;
+  }
+
   if (words.length === 0 || words.length > 4) return { valid: false };
 
-  // Every word must be at least 1 char and only letters/hyphen/apostrophe
-  const validWord = /^[a-zA-Z'\-]{1,}$/;
+  // Every word must be only letters/marks/hyphen/apostrophe (supporting Unicode \p{L}\p{M})
+  const validWord = /^[\p{L}\p{M}'\-]{1,}$/u;
   if (!words.every((w) => validWord.test(w))) return { valid: false };
 
-  // Reject known filler words, noise, and non-name temporal terms (days, months, dates, times)
-  const noise = new Set(['uh', 'um', 'ah', 'er', 'hmm', 'yes', 'no', 'okay', 'ok', 'hi', 'hello', 'hey']);
   if (words.every((w) => noise.has(w.toLowerCase()))) return { valid: false };
 
   const invalidTokens = new Set([
@@ -64,8 +74,16 @@ export function validateName(raw: string): ValidationResult {
   ]);
   if (words.some((w) => invalidTokens.has(w.toLowerCase()))) return { valid: false };
 
-  // Capitalize each word
-  const normalized = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  // Capitalize Latin words, keep other Unicode scripts as is
+  const normalized = words
+    .map((w) => {
+      if (/^[a-zA-Z]/.test(w)) {
+        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+      }
+      return w;
+    })
+    .join(' ');
+
   return { valid: true, value: normalized };
 }
 

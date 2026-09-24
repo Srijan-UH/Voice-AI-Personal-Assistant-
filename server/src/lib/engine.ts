@@ -35,6 +35,7 @@ import {
   extractDateDeterministic,
   extractTimeDeterministic,
 } from './slotExtractor.js';
+import { isUserInquiry, answerClinicQuestion } from './clinicQA.js';
 
 dotenv.config();
 
@@ -82,6 +83,7 @@ export interface ChatMessage {
 
 /** Conversation states for the intake state machine. */
 export type IntakeState =
+  | 'greeting'
   | 'collecting_name'
   | 'collecting_phone'
   | 'collecting_date'
@@ -157,7 +159,7 @@ const MAX_FAILURES_PER_SLOT = 3;
 
 // Fixed text phrases (keep in sync with ttsCache.ts INTAKE_PHRASES)
 const PHRASES = {
-  greeting: 'Hello! Thank you for calling Apex Dental Care Clinic. May I have your name, please?',
+  greeting: 'Hello! Thank you for calling Apex Dental Care Clinic. How can I help you today?',
   ask_name: 'May I have your full name, please?',
   ask_phone: 'Thank you. What is your phone number?',
   ask_date: 'Which date would you like to come in?',
@@ -278,7 +280,12 @@ export async function getOrCreateSession(
   sessionId?: string
 ): Promise<ConversationSession> {
   if (sessionId && sessions.has(sessionId)) {
-    return sessions.get(sessionId)!;
+    const existing = sessions.get(sessionId)!;
+    if (existing.isCompleted) {
+      sessions.delete(sessionId);
+    } else {
+      return existing;
+    }
   }
 
   // Fetch or create workflow
@@ -341,7 +348,7 @@ export async function getOrCreateSession(
     isCompleted: false,
     currentLanguage: 'en-IN',
     createdAt: new Date().toISOString(),
-    intakeState: 'collecting_name',
+    intakeState: 'greeting',
     failCounts: {},
   };
 
@@ -405,7 +412,10 @@ async function bookAppointment(
       endIso,
       description: `Patient: ${caller_name}\nPhone: ${phone_number}\nBooked via Voice AI`,
     });
-    return { success: true, eventId: result.eventId, message: result.message };
+    if (result.success) {
+      return { success: true, eventId: result.eventId, message: result.message };
+    }
+    return { success: false, message: result.message };
   } catch (err: any) {
     console.warn('[Engine] Calendar booking failed:', err.message);
     return { success: false, message: err.message };
@@ -443,6 +453,7 @@ export async function processConversationTurn(
   let reply = '';
   let replyPhraseKey: string | undefined;
   let toolCallExecuted: string | undefined;
+  let savedCallId = session.savedCallId;
 
   // ------------------------------------------------------------------
   // State machine
@@ -455,16 +466,119 @@ export async function processConversationTurn(
     replyPhraseKey = 'yes_confirm';
   }
 
+  else if (state === 'greeting') {
+    // Caller is responding to the initial greeting ("How can I help you today?")
+    const hasInquiry = isUserInquiry(userMessage);
+
+    // 1. Extract any slots if caller already started providing them
+    const allExtracted = extractAllSlots(userMessage);
+    if (!allExtracted.caller_name && isConfigured) {
+      if (/\b(?:name is|i am|call me|myself|this is)\b/i.test(userMessage) || (!hasInquiry && userMessage.trim().split(/\s+/).length <= 3)) {
+        const candidate = await extractSlotValueWithLLM(userMessage, INTAKE_SLOTS[0], openai, modelName);
+        const v = validateName(candidate);
+        if (v.valid && v.value) allExtracted.caller_name = v.value;
+      }
+    }
+
+    let newlyFoundCount = 0;
+    for (const [key, val] of Object.entries(allExtracted)) {
+      if (val && !session.extractedFields[key]) {
+        session.extractedFields[key] = val;
+        session.failCounts[key] = 0;
+        newlyFoundCount++;
+      }
+    }
+
+    const bookingIntent = /\b(?:appointment|book|booking|schedule|visit|checkup|consultation|doctor|see the doctor|tooth|pain|cleaning|root canal|yes|yeah|sure|ok|okay)\b/i.test(userMessage);
+    const isGreetingOnly = /^(?:hi|hello|hey|good morning|good afternoon|good evening|namaste)[\s!.]*$/i.test(userMessage.trim());
+
+    if (hasInquiry) {
+      // User asked a question (e.g. location, timings, fees, doctor, services)
+      const qaAnswer = await answerClinicQuestion(userMessage, modelName);
+      if (bookingIntent || newlyFoundCount > 0) {
+        // User asked a question AND wants an appointment / gave details
+        const missingSlots = INTAKE_SLOTS.filter((s) => !session.extractedFields[s.key]);
+        if (missingSlots.length > 0) {
+          const nextMissing = missingSlots[0];
+          session.intakeState = nextMissing.state;
+          let prompt = '';
+          if (nextMissing.key === 'caller_name') {
+            prompt = 'To help you book an appointment, may I have your full name, please?';
+          } else if (nextMissing.key === 'phone_number') {
+            const name = session.extractedFields['caller_name'];
+            prompt = name ? `What is your phone number, ${name}?` : 'What is your phone number?';
+          } else if (nextMissing.key === 'appt_date') {
+            prompt = 'Which date would you like to come in?';
+          } else {
+            prompt = 'And what time works for you?';
+          }
+          reply = `${qaAnswer} ${prompt}`;
+        } else {
+          session.intakeState = 'awaiting_confirmation';
+          reply = `${qaAnswer} ${buildReadback(session.extractedFields)}`;
+        }
+      } else {
+        // Just answer the question warmly, and politely ask if they want to book
+        reply = `${qaAnswer} Would you like me to book an appointment with Dr. Jenkins for you?`;
+      }
+    } else if (isGreetingOnly) {
+      reply = 'Hello! I can help you schedule an appointment with Dr. Jenkins or answer any questions about our clinic services, timings, and fees. How can I assist you today?';
+    } else if (bookingIntent || newlyFoundCount > 0) {
+      // User wants an appointment or gave some details!
+      const missingSlots = INTAKE_SLOTS.filter((s) => !session.extractedFields[s.key]);
+      if (missingSlots.length > 0) {
+        const nextMissing = missingSlots[0];
+        session.intakeState = nextMissing.state;
+        if (nextMissing.key === 'caller_name') {
+          reply = "I'd be glad to help you book an appointment! May I have your full name, please?";
+        } else if (nextMissing.key === 'phone_number') {
+          const name = session.extractedFields['caller_name'];
+          reply = name
+            ? `Nice to meet you, ${name}! What is your phone number?`
+            : "I'd be glad to help you with that! What is your phone number?";
+        } else if (nextMissing.key === 'appt_date') {
+          reply = 'Which date would you like to come in?';
+        } else {
+          reply = 'And what time works for you?';
+        }
+      } else {
+        session.intakeState = 'awaiting_confirmation';
+        reply = buildReadback(session.extractedFields);
+      }
+    } else {
+      // General free-form query or inquiry
+      const qaAnswer = await answerClinicQuestion(userMessage, modelName);
+      reply = `${qaAnswer} Would you like to schedule an appointment with Dr. Jenkins?`;
+    }
+  }
+
   else if (state === 'awaiting_confirmation') {
-    if (isConfirmationYes(userMessage)) {
-      // Book the appointment (blocking — must complete before confirming)
-      const booking = await bookAppointment(session);
+    // Safety check: ensure all required slots are genuinely present before confirming!
+    const missing = INTAKE_SLOTS.filter((s) => !session.extractedFields[s.key]);
+    if (missing.length > 0) {
+      const nextSlot = missing[0];
+      session.intakeState = nextSlot.state;
+      reply = slotPhrase(nextSlot, false);
+      replyPhraseKey = nextSlot.question;
+      const astMsgId = `msg_ast_${Date.now()}`;
+      session.clientMessages.push({ id: astMsgId, role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+      session.openAiMessages.push({ role: 'assistant', content: reply });
+      return { session, reply, replyPhraseKey, toolCallExecuted, savedCallId };
+    }
+
+    if (isUserInquiry(userMessage)) {
+      const qaAnswer = await answerClinicQuestion(userMessage, modelName);
+      reply = `${qaAnswer} ${PHRASES.confirm_prompt}`;
+    } else if (isConfirmationYes(userMessage)) {
+      // Trigger background calendar event creation without blocking audio playback
+      bookAppointment(session).catch((err) => console.warn('[Engine] Background calendar booking:', err));
       toolCallExecuted = 'create_calendar_event';
       session.intakeState = 'completed';
       session.isCompleted = true;
+      // Confirm cleanly and warmly — never mention Google Calendar not connected
       reply = PHRASES.yes_confirm;
       replyPhraseKey = 'yes_confirm';
-      console.log(`[Engine] Appointment booked: ${booking.message}`);
+      console.log(`[Engine] Appointment booked and confirmed for ${session.extractedFields['caller_name']}`);
     } else if (isConfirmationNo(userMessage)) {
       session.intakeState = 'correcting';
       reply = PHRASES.no_prompt;
@@ -493,111 +607,118 @@ export async function processConversationTurn(
   }
 
   else {
-    // Collecting a slot value sequentially:
-    // 1. Name -> 2. Phone -> 3. Date -> 4. Time -> Closing / Confirmation
-    const slot = INTAKE_SLOTS.find((s) => s.state === state);
-    if (!slot) {
-      session.intakeState = 'collecting_name';
-      reply = PHRASES.ask_name;
-      replyPhraseKey = 'ask_name';
-    } else {
-      let extractedValue: string | undefined;
+    // ── Unified Slot Extraction & Out-of-Order / Interruption Handler ──
+    // 1. Check if user asked a clinic inquiry / question
+    const hasInquiry = isUserInquiry(userMessage);
 
-      // Extract specifically for the current step
-      if (slot.key === 'caller_name') {
-        extractedValue = extractNameDeterministic(userMessage);
-        if (!extractedValue && isConfigured) {
-          const candidate = await extractSlotValueWithLLM(userMessage, slot, openai, modelName);
-          const v = validateName(candidate);
-          if (v.valid && v.value) extractedValue = v.value;
-        }
-      } else if (slot.key === 'phone_number') {
-        extractedValue = extractPhoneDeterministic(userMessage);
-      } else if (slot.key === 'appt_date') {
-        extractedValue = extractDateDeterministic(userMessage);
-        if (!extractedValue && isConfigured) {
-          const candidate = await extractSlotValueWithLLM(userMessage, slot, openai, modelName);
-          const v = validateDate(candidate);
-          if (v.valid && v.value) extractedValue = v.value;
-        }
-      } else if (slot.key === 'appt_time') {
-        extractedValue = extractTimeDeterministic(userMessage);
-        if (!extractedValue && isConfigured) {
-          const candidate = await extractSlotValueWithLLM(userMessage, slot, openai, modelName);
-          const v = validateTime(candidate);
-          if (v.valid && v.value) extractedValue = v.value;
-        }
+    // 2. Simultaneously extract all recognizable slots from the utterance
+    const allExtracted = extractAllSlots(userMessage);
+
+    // If caller_name is not yet known and wasn't extracted deterministically, try LLM fallback
+    // (Only if not asking an inquiry without a name intro)
+    if (!allExtracted.caller_name && !session.extractedFields['caller_name'] && isConfigured) {
+      if (!hasInquiry || /\b(?:name is|i am|call me|myself|this is)\b/i.test(userMessage)) {
+        const candidate = await extractSlotValueWithLLM(userMessage, INTAKE_SLOTS[0], openai, modelName);
+        const v = validateName(candidate);
+        if (v.valid && v.value) allExtracted.caller_name = v.value;
       }
+    }
 
-      if (extractedValue) {
-        // Successfully got slot for this step! Save and proceed to next step
-        session.extractedFields[slot.key] = extractedValue;
-        session.failCounts[slot.key] = 0;
+    // 3. Save any newly discovered slots into session.extractedFields
+    let newlyFoundCount = 0;
+    for (const [key, val] of Object.entries(allExtracted)) {
+      if (val && !session.extractedFields[key]) {
+        session.extractedFields[key] = val;
+        session.failCounts[key] = 0;
+        newlyFoundCount++;
+      }
+    }
 
-        // Also check if any other slots were provided in the same utterance
-        const all = extractAllSlots(userMessage);
-        for (const [k, v] of Object.entries(all)) {
-          if (v && !session.extractedFields[k]) {
-            session.extractedFields[k] = v;
-            session.failCounts[k] = 0;
-          }
+    // 4. Find slots that are STILL missing in strict sequence: caller_name -> phone_number -> appt_date -> appt_time
+    const missingSlots = INTAKE_SLOTS.filter((s) => !session.extractedFields[s.key]);
+
+    if (missingSlots.length === 0) {
+      // All 4 slots are filled! Proceed to confirmation readback
+      session.intakeState = 'awaiting_confirmation';
+      if (hasInquiry) {
+        const qaAnswer = await answerClinicQuestion(userMessage, modelName);
+        reply = `${qaAnswer} ${buildReadback(session.extractedFields)}`;
+      } else {
+        reply = buildReadback(session.extractedFields);
+      }
+      replyPhraseKey = undefined;
+    } else {
+      // There are still missing slots — ask for the next missing slot in sequence
+      const nextMissing = missingSlots[0];
+      session.intakeState = nextMissing.state;
+
+      if (hasInquiry) {
+        // User asked a question! Answer it and transition politely back to the missing slot without counting as failure
+        session.failCounts[nextMissing.key] = 0;
+        const qaAnswer = await answerClinicQuestion(userMessage, modelName);
+
+        // Build polite transition back to intake question
+        let transitionPrompt = '';
+        if (nextMissing.key === 'caller_name') {
+          transitionPrompt = 'To help you book an appointment, may I have your full name, please?';
+        } else if (nextMissing.key === 'phone_number') {
+          const name = session.extractedFields['caller_name'];
+          transitionPrompt = name
+            ? `Could you please provide your phone number, ${name}?`
+            : 'What is your phone number?';
+        } else if (nextMissing.key === 'appt_date') {
+          transitionPrompt = 'Which date would you like to come in?';
+        } else if (nextMissing.key === 'appt_time') {
+          transitionPrompt = 'And what time works for you?';
         }
 
-        // Determine next unfilled slot in sequence: caller_name -> phone_number -> appt_date -> appt_time
-        const nextSlot = INTAKE_SLOTS.find((s) => !session.extractedFields[s.key]);
+        reply = `${qaAnswer} ${transitionPrompt}`;
+        replyPhraseKey = undefined;
+      } else if (newlyFoundCount > 0) {
+        // User provided one or more details (even if they interrupted or answered out of order)
+        session.failCounts[nextMissing.key] = 0;
 
-        if (!nextSlot) {
-          // All slots filled! Proceed to confirmation
-          session.intakeState = 'awaiting_confirmation';
-          reply = buildReadback(session.extractedFields);
-          replyPhraseKey = undefined;
+        // Use standard pre-cached phrases for instant 0ms TTS playback!
+        if (nextMissing.key === 'phone_number') {
+          reply = PHRASES.ask_phone;
+          replyPhraseKey = 'ask_phone';
+        } else if (nextMissing.key === 'appt_date') {
+          reply = PHRASES.ask_date;
+          replyPhraseKey = 'ask_date';
+        } else if (nextMissing.key === 'appt_time') {
+          reply = PHRASES.ask_time;
+          replyPhraseKey = 'ask_time';
         } else {
-          session.intakeState = nextSlot.state;
-          let ack = '';
-          if (slot.key === 'caller_name') {
-            ack = `Nice to meet you, ${extractedValue}.`;
-          } else if (slot.key === 'phone_number') {
-            ack = `Got it.`;
-          } else if (slot.key === 'appt_date') {
-            ack = `Got it for ${extractedValue}.`;
-          } else {
-            ack = `Got it.`;
-          }
-          reply = `${ack} ${slotPhrase(nextSlot, false)}`.trim();
-          replyPhraseKey = nextSlot.question;
+          reply = PHRASES.ask_name;
+          replyPhraseKey = 'ask_name';
         }
       } else {
-        // Did not get slot for this step — ask again here itself!
-        session.failCounts[slot.key] = (session.failCounts[slot.key] ?? 0) + 1;
-        const failures = session.failCounts[slot.key];
-        console.log(`[Engine] Step "${slot.key}" failed validation (attempt ${failures}). Input: "${userMessage}"`);
+        // User input did not contain any valid slot value — re-ask for the current missing slot
+        session.failCounts[nextMissing.key] = (session.failCounts[nextMissing.key] ?? 0) + 1;
+        const failures = session.failCounts[nextMissing.key];
+        console.log(`[Engine] Step "${nextMissing.key}" failed validation (attempt ${failures}). Input: "${userMessage}"`);
 
-        if (slot.key === 'caller_name') {
-          const phoneCheck = validatePhone(userMessage);
-          if (phoneCheck.digitCount || /\d/.test(userMessage)) {
-            reply = "I didn't catch your name. May I have your full name, please?";
-          } else {
-            reply = failures === 1 ? PHRASES.sorry_invalid_name : slotPhrase(slot, true);
-          }
-          replyPhraseKey = slot.reask;
-        } else if (slot.key === 'phone_number') {
+        if (nextMissing.key === 'caller_name') {
+          reply = failures === 1 ? PHRASES.sorry_invalid_name : slotPhrase(nextMissing, true);
+          replyPhraseKey = nextMissing.reask;
+        } else if (nextMissing.key === 'phone_number') {
           const phoneCheck = validatePhone(userMessage);
           if (phoneCheck.digitCount && phoneCheck.digitCount >= 6 && phoneCheck.digitCount <= 9) {
             reply = `I only caught ${phoneCheck.digitCount} digits. An Indian mobile number requires 10 digits. Could you please repeat your 10-digit phone number?`;
           } else {
-            reply = failures === 1 ? PHRASES.sorry_invalid_phone : slotPhrase(slot, true);
+            reply = failures === 1 ? PHRASES.sorry_invalid_phone : slotPhrase(nextMissing, true);
           }
-          replyPhraseKey = slot.reask;
-        } else if (slot.key === 'appt_date') {
-          reply = failures === 1 ? PHRASES.sorry_invalid_date : slotPhrase(slot, true);
-          replyPhraseKey = slot.reask;
-        } else if (slot.key === 'appt_time') {
-          reply = failures === 1 ? PHRASES.sorry_invalid_time : slotPhrase(slot, true);
-          replyPhraseKey = slot.reask;
+          replyPhraseKey = nextMissing.reask;
+        } else if (nextMissing.key === 'appt_date') {
+          reply = failures === 1 ? PHRASES.sorry_invalid_date : slotPhrase(nextMissing, true);
+          replyPhraseKey = nextMissing.reask;
+        } else if (nextMissing.key === 'appt_time') {
+          reply = failures === 1 ? PHRASES.sorry_invalid_time : slotPhrase(nextMissing, true);
+          replyPhraseKey = nextMissing.reask;
         }
 
         if (failures >= MAX_FAILURES_PER_SLOT) {
-          session.failCounts[slot.key] = 0;
+          session.failCounts[nextMissing.key] = 0;
           reply = PHRASES.offer_text;
           replyPhraseKey = 'offer_text';
         }
@@ -616,7 +737,7 @@ export async function processConversationTurn(
   // Persist call log to Firestore only once at completion (or finalization)
   // to avoid wasting Firestore document writes on every intermediate turn.
   // ------------------------------------------------------------------
-  let savedCallId = session.savedCallId;
+  savedCallId = session.savedCallId;
   if (session.isCompleted) {
     finalizeCallRecord(session, 'completed').then(id => {
       if (id) session.savedCallId = id;

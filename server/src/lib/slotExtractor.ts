@@ -22,14 +22,14 @@ export interface ExtractedSlots {
 // Common conversational preambles to strip before analyzing names
 const GREETING_FILLERS = [
   /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening))\s*,?\s*/i,
-  /^(?:yes|yeah|sure|okay|ok|actually|yep)\s*,?\s*/i,
+  /^(?:yes|yeah|sure|okay|ok|actually|yep|uh|um|ah|er|hmm)\s*,?\s*/i,
   /^(?:please\s+note\s+that|i\s+would\s+like\s+to\s+say\s+that)\s*,?\s*/i,
 ];
 
-// Name introduction patterns
+// Name introduction patterns (supports Unicode letters \p{L} and marks \p{M})
 const NAME_PATTERNS = [
-  /(?:my\s+name\s+is|my\s+name's|i\s+am|i'm|this\s+is|myself|call\s+me|you\s+can\s+call\s+me|name\s+is)\s+([a-zA-Z'\-\.\s]{2,40})/i,
-  /(?:speaking\s+here\s+is|it\s+is|it's)\s+([a-zA-Z'\-\.\s]{2,40})/i,
+  /(?:my\s+name\s+is|my\s+name's|i\s+am|i'm|this\s+is|myself|call\s+me|you\s+can\s+call\s+me|name\s+is)\s+([\p{L}\p{M}'\-\.\s]{2,40})/iu,
+  /(?:speaking\s+here\s+is|it\s+is|it's)\s+([\p{L}\p{M}'\-\.\s]{2,40})/iu,
 ];
 
 // Words that indicate the user is talking about something other than their name
@@ -61,7 +61,7 @@ export function extractNameDeterministic(text: string): string | undefined {
   // Strip phone numbers from text first if present to avoid confusing name checks
   cleaned = cleaned.replace(/(?:\+91|0)?[6-9]\d{9}/g, '').trim();
 
-  // Strip leading greetings
+  // Strip leading greetings and fillers
   for (const filler of GREETING_FILLERS) {
     cleaned = cleaned.replace(filler, '').trim();
   }
@@ -83,7 +83,17 @@ export function extractNameDeterministic(text: string): string | undefined {
     }
   }
 
-  // 2. Direct name input: 1 to 4 words with no digits or special punctuation
+  // 2. Direct name input or compound clause prefix (e.g. "Ramesh and my number is..." or "Ramesh, tomorrow")
+  // First, if user provided a compound sentence without explicit "my name is":
+  const clauseCandidate = cleaned.split(/\b(?:and|my|phone|number|mobile|for|want|need|at|on)\b/i)[0].trim().replace(/[.,!?;:]/g, '');
+  if (clauseCandidate && clauseCandidate !== cleaned) {
+    const validated = validateName(clauseCandidate);
+    if (validated.valid && validated.value) {
+      return validated.value;
+    }
+  }
+
+  // 3. Direct name input: 1 to 4 words with no digits or special punctuation
   // e.g. "Ramesh", "Ramesh Kumar", "Dr Ramesh Verma", "Priya S"
   const candidateDirect = cleaned.replace(/[.,!?;:]/g, '').trim();
   const words = candidateDirect.split(/\s+/).filter(Boolean);

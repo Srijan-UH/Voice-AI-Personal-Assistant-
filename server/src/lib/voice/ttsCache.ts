@@ -33,7 +33,7 @@ interface CacheMetadata {
 }
 
 export const INTAKE_PHRASES: Record<string, string> = {
-  greeting: 'Hello! Thank you for calling Apex Dental Care Clinic. May I have your name, please?',
+  greeting: 'Hello! Thank you for calling Apex Dental Care Clinic. How can I help you today?',
 
   ask_name: 'May I have your full name, please?',
   ask_phone: 'Thank you. What is your phone number?',

@@ -130,7 +130,8 @@ export async function createWorkflow(
 export async function sendChatMessage(
   workflowId: string,
   message: string,
-  sessionId?: string
+  sessionId?: string,
+  signal?: AbortSignal
 ): Promise<ChatTurnResponse> {
   const response = await fetch(`${API_BASE_URL}/api/conversations/${workflowId}/message`, {
     method: 'POST',
@@ -141,6 +142,7 @@ export async function sendChatMessage(
       sessionId,
       message,
     }),
+    signal,
   });
 
   const result = await response.json();
